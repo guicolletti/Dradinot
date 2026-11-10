@@ -7,14 +7,16 @@
 const GRAVITY = 700;
 const REACH = TS * 7;
 
-// Movimento com colisão contra a grade da nave (usado por jogador e itens)
-function collideMove(e, ship, dt, forItem, dropping) {
+// Movimento com colisão contra a grade da nave (usado por jogador e itens).
+// boxes (opcional): caixas sólidas extras {x,y,w,h}, ex.: itens soltos para o jogador.
+function collideMove(e, ship, dt, forItem, dropping, boxes) {
   const solid = forItem ? (x, y) => ship.solidForItem(x, y) : (x, y) => ship.solidAt(x, y);
   const maxV = TS * 0.9 / dt;
   e.vx = clamp(e.vx, -maxV, maxV);
   e.vy = clamp(e.vy, -maxV, maxV);
   let hitX = false, hitY = false;
   // eixo X
+  const prevLeft = e.x, prevRight = e.x + e.w;
   e.x += e.vx * dt;
   let y0 = Math.floor(e.y / TS), y1 = Math.floor((e.y + e.h - 0.01) / TS);
   if (e.vx > 0) {
@@ -24,20 +26,39 @@ function collideMove(e, ship, dt, forItem, dropping) {
     const cx = Math.floor(e.x / TS);
     for (let cy = y0; cy <= y1; cy++) if (solid(cx, cy)) { e.x = (cx + 1) * TS; hitX = true; break; }
   }
+  if (boxes && e.vx !== 0) {
+    for (const b of boxes) {
+      if (e.y + e.h <= b.y + 0.01 || e.y >= b.y + b.h - 0.01) continue; // sem sobreposição vertical
+      // só bloqueia se antes estava do lado de fora (evita "teleportes" quando já sobreposto)
+      if (e.vx > 0 && prevRight <= b.x + 0.5 && e.x + e.w > b.x) { e.x = b.x - e.w; hitX = true; }
+      else if (e.vx < 0 && prevLeft >= b.x + b.w - 0.5 && e.x < b.x + b.w) { e.x = b.x + b.w; hitX = true; }
+    }
+  }
   // eixo Y
-  const prevBottom = e.y + e.h;
+  const prevBottom = e.y + e.h, prevTop = e.y;
   e.y += e.vy * dt;
   e.onGround = false;
   const x0 = Math.floor(e.x / TS), x1 = Math.floor((e.x + e.w - 0.01) / TS);
   if (e.vy >= 0) {
     const cy = Math.floor((e.y + e.h - 0.01) / TS);
     for (let cx = x0; cx <= x1; cx++) {
-      const plat = !dropping && ship.platformAt(cx, cy) && prevBottom <= cy * TS + 0.5;
+      // itens atravessam passarelas e topos de escada (só personagens ficam em cima deles)
+      const plat = !forItem && !dropping && ship.platformAt(cx, cy) && prevBottom <= cy * TS + 0.5;
       if (solid(cx, cy) || plat) { e.y = cy * TS - e.h; e.vy = 0; hitY = true; e.onGround = true; break; }
     }
   } else {
     const cy = Math.floor(e.y / TS);
     for (let cx = x0; cx <= x1; cx++) if (solid(cx, cy)) { e.y = (cy + 1) * TS; e.vy = 0; hitY = true; break; }
+  }
+  if (boxes) {
+    for (const b of boxes) {
+      if (e.x + e.w <= b.x + 0.01 || e.x >= b.x + b.w - 0.01) continue; // sem sobreposição horizontal
+      if (e.vy >= 0 && prevBottom <= b.y + 0.5 && e.y + e.h > b.y) {
+        e.y = b.y - e.h; e.vy = 0; hitY = true; e.onGround = true; // em pé sobre o item
+      } else if (e.vy < 0 && prevTop >= b.y + b.h - 0.5 && e.y < b.y + b.h) {
+        e.y = b.y + b.h; e.vy = 0; hitY = true; // bateu a cabeça no item
+      }
+    }
   }
   return { hitX, hitY };
 }
@@ -160,7 +181,10 @@ class Player {
       if (input.downPressed && this.onGround) this.dropT = 0.2;
       this.dropT -= dt;
       const goingUp = this.vy < 0;
-      const hit = collideMove(this, s, dt, false, this.dropT > 0 || (input.down && !this.onGround));
+      // itens soltos são sólidos para o personagem; no navegador usa a posição
+      // oficial do servidor (tx/ty) em vez da posição suavizada do desenho
+      const boxes = s.items.map((it) => ({ x: it.tx ?? it.x, y: it.ty ?? it.y, w: it.w, h: it.h }));
+      const hit = collideMove(this, s, dt, false, this.dropT > 0 || (input.down && !this.onGround), boxes);
       if (hit.hitY && goingUp) this.jumpT = 0; // bateu no teto: encerra o pulo
     }
     if (this.vx !== 0) this.facing = sign(this.vx);

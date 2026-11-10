@@ -444,6 +444,7 @@ class World {
       it.x = clamp(it.x, TS, s.pw - TS - it.w);
       it.y = clamp(it.y, TS, s.ph - TS - it.h);
     }
+    this.pushItemsByCrew(s);
     this.separateItems(s);
     for (const o of s.objects) {
       const od = OBJECTS[o.type];
@@ -458,6 +459,52 @@ class World {
           if (n - k > 0) s.cargoQueue[0] = [item, n - k]; else s.cargoQueue.shift();
           o.cool = 0.3;
           this.sound('pop', s.cx, s.cy);
+        }
+      }
+    }
+  }
+
+  // colisão entre tripulantes e itens soltos (lado do servidor).
+  // O personagem é sólido para os itens: item que cai em cima dele fica apoiado
+  // e anda junto; andando contra um item, o personagem o empurra.
+  // (O navegador faz o outro lado: o personagem fica em pé sobre os itens.)
+  pushItemsByCrew(s) {
+    if (!s.crew || !s.crew.length || !s.items.length) return;
+    const fits = (it, x) => {
+      const x0 = Math.floor(x / TS), x1 = Math.floor((x + it.w - 0.01) / TS);
+      const y0 = Math.floor(it.y / TS), y1 = Math.floor((it.y + it.h - 0.01) / TS);
+      for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) if (s.solidForItem(cx, cy)) return false;
+      return true;
+    };
+    for (const c of s.crew) {
+      const p = c.player;
+      if (!p || p.mode !== 'walk') continue;
+      for (const it of s.items) {
+        const ox = Math.min(p.x + p.w, it.x + it.w) - Math.max(p.x, it.x); // > 0: sobreposição horizontal
+        const oy = Math.min(p.y + p.h, it.y + it.h) - Math.max(p.y, it.y); // > 0: sobreposição vertical
+        if (ox < -2 || oy < -2) continue; // longe
+        const itBottom = it.y + it.h;
+        // 1) item caindo/apoiado na cabeça do personagem
+        if (ox > 1 && it.vy >= 0 && itBottom >= p.y - 1 && itBottom <= p.y + 8) {
+          it.y = p.y - it.h; it.vy = 0; it.onGround = true;
+          it.vx = p.vx;
+          continue;
+        }
+        // 2) item embaixo dos pés: o personagem está em pé nele (tratado no navegador)
+        if (it.y >= p.y + p.h - 4) continue;
+        // 3) contato lateral
+        if (oy <= 1) continue;
+        const dir = it.x + it.w / 2 < p.x + p.w / 2 ? -1 : 1;
+        if (ox > 0.5) {
+          // sobrepostos (atraso de rede, item caiu de lado): tira o item de dentro
+          const nx = dir < 0 ? p.x - it.w : p.x + p.w;
+          if (fits(it, nx)) it.x = nx;
+        }
+        // andando contra o item: empurra (um pouco mais rápido que o personagem,
+        // para ele não ficar "travado" esperando a posição nova chegar pela rede)
+        if (dir * p.vx > 1) {
+          const sp = Math.abs(p.vx) + 20;
+          if (dir * it.vx < sp) it.vx = dir * sp;
         }
       }
     }
