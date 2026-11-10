@@ -261,11 +261,40 @@ class Session {
       }
       if (obj.type === 'recycler') { this.recycle(obj, h); return; }
       if (obj.type === 'ejector') { this.eject(obj, h); return; }
-      if (obj.type === 'expando') { this.openUI('store', obj); return; }
+      if (obj.type === 'expando') { this.expandoClick(obj, ly, shift, true); return; }
     }
     if (turret) { this.controlTurret(turret); return; }
     if (obj) { this.interact(obj); return; }
     if (d) this.useHeld(lx, ly, cx, cy);
+  }
+
+  // caixa expansível: metade de cima guarda o item da mão, metade de baixo retira.
+  // Guarda um único tipo de item; Shift move só 1 unidade.
+  expandoClick(o, ly, shift, canDeposit) {
+    const p = this.player, h = p.held;
+    const st = o.store || (o.store = { item: null, n: 0 });
+    const top = ly < (o.y + OBJECTS.expando.h / 2) * TS;
+    if (top) {
+      if (!h || !canDeposit) { this.notify('Segure um item para guardar na caixa.', '#aaa'); return; }
+      if (st.item && st.item !== h.item) {
+        this.notify(`Esta caixa só guarda ${ITEMS[st.item].name}.`, '#ffb070'); this.sfxMe('error'); return;
+      }
+      const space = expandoCap(h.item) - st.n;
+      if (space <= 0) { this.notify('A caixa está cheia.', '#ffb070'); this.sfxMe('error'); return; }
+      const k = Math.min(shift ? 1 : h.n, space);
+      st.item = h.item; st.n += k;
+      this.consumeHeld(k);
+      this.sfx('place');
+    } else {
+      if (!st.item || st.n <= 0) { this.notify('A caixa está vazia.', '#aaa'); return; }
+      const want = Math.min(shift ? 1 : ITEMS[st.item].stack, st.n);
+      const rest = invAdd(p.inv, st.item, want);
+      const got = want - rest;
+      if (got <= 0) { this.notify('Inventário cheio.', '#ffb070'); this.sfxMe('error'); return; }
+      st.n -= got;
+      if (st.n <= 0) { st.item = null; st.n = 0; }
+      this.sfxMe('collect');
+    }
   }
 
   openUI(type, o) {
@@ -352,7 +381,7 @@ class Session {
         this.notify(`Escotilha: ${o.mode === 'all' ? 'liberada (verde)' : 'bloqueada (vermelha)'}`, '#cfe');
         this.sfx('click');
         break;
-      case 'expando': this.openUI('store', o); break;
+      case 'expando': this.expandoClick(o, this.mouse.ly, false, false); break;
       case 'shield_gen': this.notify(`Gerador de escudo: ${Math.round(o.fuel || 0)} de carga. Use Reforços ou Fluxo nele.`, '#9fe0ff'); break;
       case 'recycler': this.notify('Clique no reciclador segurando um item para reciclá-lo.', '#cfe'); break;
       case 'ejector': this.notify('Clique no ejetor segurando um item para lançá-lo ao espaço.', '#cfe'); break;
@@ -454,6 +483,11 @@ class Session {
       for (const c of s.crew) if (c.player && c.player.ctrl === obj) c.exitControl();
       if (obj.mats) for (const m of FAB_MATS) if (obj.mats[m] > 0) s.spawnItem(m, obj.mats[m], lx, ly, rand(-40, 40), -100);
       if (obj.inv) for (const st of obj.inv) if (st) s.spawnItem(st.item, st.n, lx, ly, rand(-60, 60), -120);
+      if (obj.store && obj.store.item) {
+        // caixa desmontada: devolve o conteúdo em pilhas
+        let left = obj.store.n;
+        while (left > 0) { const k = Math.min(left, ITEMS[obj.store.item].stack); s.spawnItem(obj.store.item, k, lx, ly, rand(-60, 60), -120); left -= k; }
+      }
       s.removeObject(obj);
       this.giveItem(obj.type, 1, lx, ly);
     } else {

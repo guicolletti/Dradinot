@@ -349,6 +349,15 @@ class Renderer {
       if (o.type === 'helm') { s._helmSpin = (s._helmSpin || 0) + (s.thrustX || 0) * 0.05; o.spin = s._helmSpin; }
       ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(1, d.h * TS - 1.5, d.w * TS - 2, 2.5);
       drawObjectShape(ctx, o, d.w * TS, d.h * TS);
+      if (o.type === 'expando' && o.store && o.store.item) {
+        // mostra o item guardado e a quantidade na frente da caixa
+        const bw = d.w * TS, bh = d.h * TS;
+        ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(bw / 2 - 7, bh / 2 - 8, 14, 13);
+        drawItemIcon(ctx, o.store.item, bw / 2, bh / 2 - 1.5, 11, 0);
+        ctx.font = 'bold 6px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillText(o.store.n, bw / 2 + 0.5, bh - 2.5);
+        ctx.fillStyle = '#fff'; ctx.fillText(o.store.n, bw / 2, bh - 3);
+      }
       if (o.hp < d.hp) {
         ctx.fillStyle = '#300'; ctx.fillRect(0, -4, d.w * TS, 2.5);
         ctx.fillStyle = '#f55'; ctx.fillRect(0, -4, d.w * TS * (o.hp / d.hp), 2.5);
@@ -377,6 +386,8 @@ class Renderer {
       }
     }
     // torretas
+    // a munição aparece aos poucos conforme o zoom chega perto (1.8 → 2.4)
+    const ammoAlpha = s === g.ship ? clamp((g.cam.zoom - 1.8) / 0.6, 0, 1) : 0;
     for (const t of s.turrets) {
       const p = s.turretLocal(t);
       const d = TURRETS[t.type];
@@ -399,6 +410,15 @@ class Renderer {
       ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = shade(d.color, -0.6); ctx.lineWidth = 1; ctx.stroke();
       if (g.player && g.player.ctrl === t) { ctx.strokeStyle = '#ffd84a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.stroke(); }
+      // munição (só na própria nave e com o zoom perto): "13/24", no estilo da quantidade dos itens
+      if (ammoAlpha > 0) {
+        const txt = `${t.ammo}/${d.cap}`;
+        ctx.globalAlpha = ammoAlpha;
+        ctx.font = 'bold 6px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillText(txt, 0.5, 16.5);
+        ctx.fillStyle = t.ammo > 0 ? '#fff' : '#ff7a6a'; ctx.fillText(txt, 0, 16);
+        ctx.globalAlpha = 1;
+      }
       ctx.restore();
     }
     // tripulação
@@ -616,6 +636,8 @@ class Renderer {
         ctx.setLineDash([]);
       }
     }
+    // dica do que está sob o mouse (itens, torretas, construções, blocos)
+    this.drawHover(ctx, lx, ly, cx, cy, h, inReach);
     // progresso da chave inglesa
     if (g.wrench && g.wrench.t > 0) {
       ctx.strokeStyle = '#ffd84a'; ctx.lineWidth = 3;
@@ -627,6 +649,154 @@ class Renderer {
       ctx.beginPath(); ctx.arc(p.cxL, p.cyL, REACH, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.restore();
+  }
+
+  // ---------- dica ao passar o mouse ----------
+  // Mesma prioridade do clique: item solto > torreta > construção.
+  // Blocos (escada, passarela etc.) não têm dica: só o que tem função.
+  hoverInfo(lx, ly, cx, cy, h) {
+    const s = this.game.ship;
+    const hd = h ? ITEMS[h.item] : null;
+    const wrench = hd && hd.tool === 'wrench';
+    const L = [];                       // linhas: { t, c }
+    const hint = (t) => L.push({ t: t[0].toUpperCase() + t.slice(1), c: '#9fe0ff' });
+    const info = (t, c = '#d8d8d8') => L.push({ t, c });
+    const hpLine = (hp, max) => { if (hp < max) info(`Integridade ${Math.ceil(hp)}/${max}`, hp / max < 0.35 ? '#ff8a7a' : '#ffd890'); };
+
+    // item solto
+    let it = null, bd = 12;
+    for (const x of s.items) { const d = dist(lx, ly, x.x + x.w / 2, x.y + x.h / 2); if (d < bd) { bd = d; it = x; } }
+    if (it) {
+      const d = ITEMS[it.item];
+      if (hd && hd.tool === 'shredder') hint('destruir');
+      return { rect: { x: it.x - 1, y: it.y - 1, w: it.w + 2, h: it.h + 2 }, title: d.name + (it.n > 1 ? ` ×${it.n}` : ''), rare: RARE_ITEMS.has(it.item), lines: L };
+    }
+
+    // torreta
+    let t = s.turretAtHull(cx, cy);
+    if (!t) for (const x of s.turrets) { const q = s.turretLocal(x); if (dist(lx, ly, q.x, q.y) < 14) { t = x; break; } }
+    if (t) {
+      const td = TURRETS[t.type], q = s.turretLocal(t);
+      info(t.ammo > 0 ? `Munição ${t.ammo}/${td.cap}${t.ammoType ? ' • ' + AMMO[t.ammoType].name : ''}` : 'Sem munição', t.ammo > 0 ? '#d8d8d8' : '#ff8a7a');
+      if (t.hp !== undefined) hpLine(t.hp, 60);
+      if (wrench) hint('Segure para desmontar');
+      else if (hd && hd.kind === 'ammo') hint('Carregar (Shift: pilha toda)');
+      else if (td.rc) hint('Controlada pelo leme');
+      else hint('controlar');
+      return { rect: { x: q.x - 9, y: q.y - 9, w: 18, h: 18 }, title: td.name, rare: RARE_ITEMS.has(t.type), lines: L };
+    }
+
+    // construção
+    const o = s.objectAt(cx, cy);
+    if (o) {
+      const od = OBJECTS[o.type];
+      const rect = { x: o.x * TS, y: o.y * TS, w: od.w * TS, h: od.h * TS };
+      let zones = null;
+      if (od.fab) {
+        const r = o.queue && o.queue[0] && RECIPES[od.fab][o.queue[0].r];
+        if (r) {
+          if (o.stalled && !o.started) info(`${ITEMS[r.out].name}: falta material`, '#ffb070');
+          else info(`${ITEMS[r.out].name} ${Math.floor(100 * (o.progress || 0) / r.t)}%`);
+        }
+        if (!wrench) hint(h && FAB_MATS.includes(h.item) ? `Carregar ${hd.name}` : 'Abrir');
+      } else switch (o.type) {
+        case 'helm': if (!wrench) hint('pilotar'); break;
+        case 'door': info(o.open ? 'Aberta' : 'Fechada'); if (!wrench) hint(o.open ? 'fechar' : 'abrir'); break;
+        case 'hatch': info(o.mode === 'none' ? 'Bloqueada' : 'Liberada', o.mode === 'none' ? '#ff8a7a' : '#8aff8a'); if (!wrench) hint(o.mode === 'none' ? 'liberar' : 'bloquear'); break;
+        case 'shield_gen':
+          info(`Carga ${Math.round(o.fuel || 0)}`);
+          if (!wrench) hint(h && (h.item === 'booster' || h.item === 'flux') ? `abastecer com ${hd.name}` : 'Abasteça com Reforço ou Fluxo');
+          break;
+        case 'recycler': if (!wrench) hint(h ? `reciclar ${hd.name}` : 'Segure um item para reciclar'); break;
+        case 'ejector': if (!wrench) hint(h ? `lançar ${hd.name} ao espaço` : 'Segure um item para lançar'); break;
+        case 'expando': {
+          const st = o.store || { item: null, n: 0 };
+          info(st.item ? `${ITEMS[st.item].name} ${st.n}/${expandoCap(st.item)}` : 'Vazia', st.item ? '#d8d8d8' : '#bcbcbc');
+          if (wrench) break;
+          const half = rect.h / 2, top = ly < rect.y + half;
+          let upTxt, upOk, dnTxt, dnOk;
+          if (!h) { upTxt = 'Segure um item para guardar'; upOk = false; }
+          else if (st.item && st.item !== h.item) { upTxt = `Só guarda ${ITEMS[st.item].name}`; upOk = false; }
+          else if (st.n >= expandoCap(h.item)) { upTxt = 'Caixa cheia'; upOk = false; }
+          else { upTxt = `Guardar ${hd.name}`; upOk = true; }
+          if (!st.item) { dnTxt = 'Nada para retirar'; dnOk = false; }
+          else { dnTxt = `Retirar ${ITEMS[st.item].name}`; dnOk = true; }
+          L.push({ t: top ? upTxt : dnTxt, c: (top ? upOk : dnOk) ? '#9fe0ff' : '#ff8a7a' });
+          zones = { half, top, upOk, dnOk };
+          break;
+        }
+      }
+      hpLine(o.hp, od.hp);
+      if (wrench) hint('Segure para desmontar');
+      return { rect, title: od.name, lines: L, zones };
+    }
+
+    return null;
+  }
+
+  // desenha só os quatro cantos de um retângulo
+  drawCorners(ctx, x, y, w, h, len) {
+    const l = Math.min(len, w / 2.5, h / 2.5);
+    ctx.beginPath();
+    ctx.moveTo(x, y + l); ctx.lineTo(x, y); ctx.lineTo(x + l, y);
+    ctx.moveTo(x + w - l, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + l);
+    ctx.moveTo(x + w, y + h - l); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - l, y + h);
+    ctx.moveTo(x + l, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - l);
+    ctx.stroke();
+  }
+
+  drawHover(ctx, lx, ly, cx, cy, h, inReach) {
+    const H = this.hoverInfo(lx, ly, cx, cy, h);
+    if (!H) return;
+    const r = H.rect;
+    // destaque do alvo
+    if (H.zones) {
+      const z = H.zones, okC = inReach ? '110,255,110' : '255,255,255', badC = '255,90,90';
+      const zone = (zy, ok, active) => {
+        const c = ok ? okC : badC;
+        ctx.fillStyle = `rgba(${c},${active ? 0.25 : 0.07})`; ctx.fillRect(r.x, zy, r.w, z.half);
+        if (active) { ctx.strokeStyle = `rgba(${c},0.9)`; ctx.lineWidth = 0.8; this.drawCorners(ctx, r.x + 0.5, zy + 0.5, r.w - 1, z.half - 1, 4); }
+      };
+      zone(r.y, z.upOk, z.top); zone(r.y + z.half, z.dnOk, !z.top);
+      const arrow = (ax, ay, dir, active) => {
+        ctx.fillStyle = active ? '#fff' : 'rgba(255,255,255,0.4)';
+        ctx.beginPath(); ctx.moveTo(ax - 2.5, ay - 1.2 * dir); ctx.lineTo(ax + 2.5, ay - 1.2 * dir); ctx.lineTo(ax, ay + 1.7 * dir); ctx.fill();
+      };
+      arrow(r.x + 4, r.y + z.half / 2, 1, z.top); arrow(r.x + 4, r.y + z.half * 1.5, -1, !z.top);
+    } else {
+      ctx.strokeStyle = 'rgba(83, 255, 91, 0.85)'; ctx.lineWidth = 0.8;
+      this.drawCorners(ctx, r.x - 0.5, r.y - 0.5, r.w + 1, r.h + 1, 4);
+    }
+    // caixa de texto acima do alvo
+    const TF = 'bold 4.5px sans-serif', BF = '3.8px sans-serif', LH = 4.8, MAXW = 90;
+    const GREEN = '#53ff5b', GREEN_DIM = '#a6ffab';
+    const rows = [{ t: H.title, c: GREEN, f: TF }];
+    ctx.font = BF;
+    for (const l of H.lines) {
+      // quebra linhas longas (descrições)
+      let cur = '';
+      for (const w of l.t.split(' ')) {
+        const test = cur ? cur + ' ' + w : w;
+        if (cur && ctx.measureText(test).width > MAXW) { rows.push({ t: cur, c: l.c, f: BF }); cur = w; } else cur = test;
+      }
+      if (cur) rows.push({ t: cur, c: l.c, f: BF });
+    }
+    if (!inReach && H.lines.length) rows.push({ t: 'muito longe', c: '#ff8a7a', f: BF });
+    let tw = 0;
+    for (const row of rows) { ctx.font = row.f; tw = Math.max(tw, ctx.measureText(row.t).width); }
+    const pad = 2, bw = tw + pad * 2, bh = rows.length * LH + pad * 1.5;
+    const by = r.y - bh - 1;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    // sem caixa de fundo: texto verde com uma sombra escura leve para ler sobre qualquer fundo
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 1.5;
+    rows.forEach((row, i) => {
+      ctx.font = row.f;
+      // vermelho/laranja continuam para avisos (caixa cheia, sem munição, muito longe...)
+      const warn = row.c === '#ff8a7a' || row.c === '#ffb070';
+      ctx.fillStyle = warn ? row.c : i === 0 ? GREEN : (!inReach ? '#8a8a8a' : GREEN_DIM);
+      ctx.fillText(row.t, r.x + r.w / 2, by + pad + (i + 1) * LH - 1.2);
+    });
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
   }
 
   drawOffscreenIndicators(ctx) {

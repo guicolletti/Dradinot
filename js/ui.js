@@ -157,9 +157,6 @@ class UI {
     const p = this.g.player;
     if (!p) return;
     document.querySelectorAll('#hotbar .slot').forEach((s, i) => { this.fillSlot(s, p.inv[i]); s.classList.toggle('sel', i === p.sel); });
-    const h = p.held;
-    $('#held-name').textContent = h ? ITEMS[h.item].name + (h.n > 1 ? ` ×${h.n}` : '') : '';
-    $('#held-name').style.color = h && RARE_ITEMS.has(h.item) ? '#7dff9a' : '#fff';
     if (this.storeOid) this.renderStorage();
   }
 

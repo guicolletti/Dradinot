@@ -434,6 +434,7 @@ class World {
       it.vx *= fr;
       const ball = ITEMS[it.item].kind === 'ball';
       const pvx = it.vx, pvy = it.vy;
+      it._py = it.y;
       const r = collideMove(it, s, dt, true, false);
       if (ball) {
         const b = ITEMS[it.item].bounce;
@@ -556,6 +557,24 @@ class World {
                 if (a.n <= 0) continue;
               }
             }
+            // item com outro apoiado em cima dele (é uma pilha, não um item solto)
+            const hasRider = (it) => {
+              const gx = Math.floor((it.x + 5) / TS), gy = Math.floor((it.y + 5) / TS);
+              for (let dy = -2; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+                const cell = grid.get(gx + dx + (gy + dy) * 1000);
+                if (cell) for (const k of cell) {
+                  const o = L[k];
+                  if (o !== it && o !== a && o !== b && o.n > 0 && Math.abs(o.y + o.h - it.y) < 2 && Math.min(o.x + o.w, it.x + it.w) - Math.max(o.x, it.x) > 1) return o;
+                }
+              }
+              return null;
+            };
+            // move o item para o lado levando junto o que está empilhado em cima dele
+            const shiftX = (it, d, depth = 0) => {
+              const r = depth < 6 ? hasRider(it) : null;
+              it.x += d;
+              if (r && free(r, r.x + d, r.y)) shiftX(r, d, depth + 1);
+            };
             const stack = () => {
               // empilha: o de cima fica apoiado no de baixo
               const top = a.y < b.y || (a.y === b.y && a.id > b.id) ? a : b, bot = top === a ? b : a;
@@ -568,16 +587,31 @@ class World {
               const left = a.x < b.x || (a.x === b.x && a.id < b.id) ? a : b, right = left === a ? b : a;
               const half = ox / 2;
               let moved = 0;
-              if (free(left, left.x - half, left.y)) { left.x -= half; moved += half; }
-              if (free(right, right.x + (ox - moved), right.y)) { right.x += ox - moved; moved = ox; }
-              else if (moved < ox && free(left, left.x - (ox - moved), left.y)) { left.x -= ox - moved; moved = ox; }
-              if (moved > 0) { const v = (left.vx + right.vx) / 2; left.vx = Math.min(left.vx, v); right.vx = Math.max(right.vx, v); }
+              if (free(left, left.x - half, left.y)) { shiftX(left, -half); moved += half; }
+              if (free(right, right.x + (ox - moved), right.y)) { shiftX(right, ox - moved); moved = ox; }
+              else if (moved < ox && free(left, left.x - (ox - moved), left.y)) { shiftX(left, -(ox - moved)); moved = ox; }
+              if (moved > 0) {
+                const v = (left.vx + right.vx) / 2; left.vx = Math.min(left.vx, v); right.vx = Math.max(right.vx, v);
+                // o que está empilhado em cima acompanha a velocidade de quem está embaixo
+                for (const base of [left, right]) {
+                  let cur = base, r, guard = 0;
+                  while ((r = hasRider(cur)) && guard++ < 6) { r.vx = cur.vx; cur = r; }
+                }
+              }
               return moved >= ox - 0.01;
             };
             a._touch = b._touch = true;
             // se ficaram espremidos lado a lado por muito tempo, empilham
-            if (oy < ox || a.ov > 20 || b.ov > 20) { if (!stack()) side(); }
-            else if (!side()) stack();
+            const top0 = a.y < b.y || (a.y === b.y && a.id > b.id) ? a : b;
+            let solved = true;
+            // Item caindo em cima de outro (sobreposição rasa na vertical) sempre empilha.
+            // Espremidos lado a lado (ex.: empurrados), um só sobe no outro se os dois
+            // forem itens soltos: contra uma pilha, ela é empurrada inteira em vez de ser escalada.
+            const canClimb = !hasRider(a) && !hasRider(b);
+            if (oy < ox) { if (!stack() && !side()) solved = false; }
+            else if ((a.ov > 20 || b.ov > 20) && canClimb) { if (!stack() && !side()) solved = false; }
+            else if (!side() && !(canClimb && stack())) solved = false;
+            if (!solved && top0._py !== undefined && top0._py < top0.y) { top0.y = top0._py; top0.vy = 0; top0.onGround = true; }
           }
         }
       }

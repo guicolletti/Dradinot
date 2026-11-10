@@ -136,7 +136,26 @@ class Ship {
       o.queue = o.queue || [];
       o.progress = o.progress || 0;
     }
-    if (type === 'expando') o.inv = o.inv || new Array(24).fill(null);
+    if (type === 'expando') {
+      o.store = o.store || { item: null, n: 0 };
+      if (o.inv) {
+        // save antigo: fica com o tipo de item mais numeroso; o resto cai no chão ao lado da caixa
+        const tot = {};
+        for (const st of o.inv) if (st) tot[st.item] = (tot[st.item] || 0) + st.n;
+        const keep = Object.keys(tot).sort((a, b) => tot[b] - tot[a])[0];
+        if (keep) {
+          const n = Math.min(tot[keep], expandoCap(keep));
+          o.store = { item: keep, n };
+          tot[keep] -= n;
+        }
+        const ex = (cx + 1) * TS, ey = (cy + 1) * TS;
+        for (const it in tot) {
+          let left = tot[it];
+          while (left > 0) { const k = Math.min(left, ITEMS[it].stack); this.spawnItem(it, k, ex, ey, rand(-40, 40), -60); left -= k; }
+        }
+        delete o.inv;
+      }
+    }
     if (type === 'door') o.open = !!o.open;
     if (type === 'shield_gen') o.fuel = o.fuel || 0;
     if (type === 'hatch') o.mode = o.mode || 'all';

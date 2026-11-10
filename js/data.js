@@ -50,8 +50,8 @@ const OBJECTS = {
   fab_equipment: { name: 'Fabricador de Equipamento', w: 2, h: 2, floor: true, hp: 80, color: '#7a5a8a', fab: 'equipment' },
   recycler:      { name: 'Reciclador', w: 2, h: 2, floor: true, hp: 60, color: '#4d6b5d' },
   expando:       { name: 'Caixa Expansível', w: 2, h: 2, floor: true, hp: 60, color: '#8a6a3a' },
-  hatch:         { name: 'Escotilha de Carga', w: 1, h: 1, floor: true, hp: 50, color: '#5b7f2f' },
-  ejector:       { name: 'Ejetor de Carga', w: 1, h: 1, floor: true, hp: 50, color: '#8a3f3f' },
+  hatch:         { name: 'Escotilha de Carga', w: 1, h: 1, floor: false, hp: 50, color: '#5b7f2f' },
+  ejector:       { name: 'Ejetor de Carga', w: 1, h: 1, floor: false, hp: 50, color: '#8a3f3f' },
   shield_gen:    { name: 'Gerador de Escudo', w: 2, h: 2, floor: true, hp: 70, color: '#2f6f9a' },
   spawn:         { name: 'Ponto de Renascimento', w: 1, h: 2, floor: true, hp: 30, color: '#3fa0a0' },
   door:          { name: 'Porta', w: 1, h: 2, floor: false, hp: 50, color: '#6a6f78', solidWhenClosed: true },
@@ -76,7 +76,7 @@ const ITEMS = {
   fab_machine:     { name: 'Fabricador de Máquinas', kind: 'object', obj: 'fab_machine', stack: 1, color: '#5a6fae' },
   fab_equipment:   { name: 'Fabricador de Equipamento', kind: 'object', obj: 'fab_equipment', stack: 1, color: '#9a6fae' },
   recycler:        { name: 'Reciclador', kind: 'object', obj: 'recycler', stack: 1, color: '#5d8a72', desc: 'Converte itens de volta em materiais (com perda).' },
-  expando:         { name: 'Caixa Expansível', kind: 'object', obj: 'expando', stack: 1, color: '#aa8448', desc: 'Guarda muitos itens.' },
+  expando:         { name: 'Caixa Expansível', kind: 'object', obj: 'expando', stack: 1, color: '#aa8448', desc: 'Guarda muitas unidades de um único tipo de item. Clique na metade de cima para guardar e na de baixo para retirar (Shift: 1 unidade).' },
   hatch:           { name: 'Escotilha de Carga', kind: 'object', obj: 'hatch', stack: 1, color: '#74a23a', desc: 'Recebe itens das caixas de saque coletadas.' },
   ejector:         { name: 'Ejetor de Carga', kind: 'object', obj: 'ejector', stack: 1, color: '#aa4f4f', desc: 'Ejeta itens para o espaço.' },
   shield_gen:      { name: 'Gerador de Escudo', kind: 'object', obj: 'shield_gen', stack: 1, color: '#3a8ac0', desc: 'Carregue com reforços ou fluxo para regenerar o escudo.' },
@@ -297,3 +297,7 @@ const LOOT_TABLES = {
     return out;
   },
 };
+
+// Caixa expansível: guarda um único tipo de item, até o equivalente a 24 pilhas dele
+const EXPANDO_STACKS = 24;
+function expandoCap(item) { return item ? ITEMS[item].stack * EXPANDO_STACKS : 0; }
