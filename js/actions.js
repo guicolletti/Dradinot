@@ -178,7 +178,16 @@ class Session {
     const p = this.player, h = p.held;
     if (!h) return;
     h.n -= n;
-    if (h.n <= 0) p.inv[p.sel] = null;
+    if (h.n <= 0) { p.inv[p.sel] = null; this.refillSlot(p.sel, h.item); }
+  }
+
+  // slot esvaziou: traz outra pilha do mesmo item para ele
+  refillSlot(i, item) {
+    const inv = this.player.inv;
+    if (inv[i]) return;
+    for (let j = 0; j < inv.length; j++) {
+      if (j !== i && inv[j] && inv[j].item === item) { inv[i] = inv[j]; inv[j] = null; return; }
+    }
   }
 
   giveItem(item, n, lx, ly) {
@@ -502,7 +511,8 @@ class Session {
     const n = clamp(m.n | 0, 1, s.n);
     const a = +m.a || 0;
     this.ship.spawnItem(s.item, n, p.cxL, p.cyL - 2, Math.cos(a) * 300, Math.sin(a) * 300 - 60);
-    s.n -= n; if (s.n <= 0) src[i] = null;
+    s.n -= n;
+    if (s.n <= 0) { src[i] = null; if (m.c === 'inv') this.refillSlot(i, s.item); }
   }
 
   // ---------- fabricadores ----------

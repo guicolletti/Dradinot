@@ -494,6 +494,21 @@ class World {
             const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
             const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
             if (ox <= 0.01 || oy <= 0.01) continue;
+            if (a.n <= 0 || b.n <= 0) continue;
+            // itens iguais se juntam na mesma pilha
+            if (a.item === b.item) {
+              const max = ITEMS[a.item].stack;
+              if (a.n < max) {
+                const k = Math.min(max - a.n, b.n);
+                a.n += k; b.n -= k;
+                if (b.n <= 0) continue;
+              }
+              if (b.n < max) {
+                const k = Math.min(max - b.n, a.n);
+                b.n += k; a.n -= k;
+                if (a.n <= 0) continue;
+              }
+            }
             const stack = () => {
               // empilha: o de cima fica apoiado no de baixo
               const top = a.y < b.y || (a.y === b.y && a.id > b.id) ? a : b, bot = top === a ? b : a;
@@ -521,6 +536,31 @@ class World {
       }
     }
     for (const it of L) it.ov = it._touch ? (it.ov || 0) + 1 : 0;
+    if (L.some((it) => it.n <= 0)) s.items = L.filter((it) => it.n > 0);
+  }
+
+  // procura um lugar livre para o item produzido dentro da área do fabricador.
+  // Retorna null se a área estiver totalmente ocupada por outros itens.
+  fabOutputSpot(s, o, outItem, n) {
+    const od = OBJECTS[o.type];
+    const x0 = o.x * TS, y0 = o.y * TS, w = od.w * TS, h = od.h * TS;
+    const near = s.items.filter((it) => aabbOverlap(it.x, it.y, it.w, it.h, x0 - 2, y0 - 2, w + 4, h + 4));
+    // pilha do mesmo item com espaço aceita a produção
+    for (const it of near) if (it.item === outItem && it.n + n <= ITEMS[outItem].stack) return { x: it.x, y: it.y, it };
+    for (let y = y0 + h - 10; y >= y0; y -= 2) {
+      for (let k = 0; k <= w - 10; k += 2) {
+        // começa pelo centro e vai para as bordas
+        const off = (k / 2) % 2 ? -Math.ceil(k / 4) * 2 : Math.ceil(k / 4) * 2;
+        const x = clamp(x0 + w / 2 - 5 + off, x0, x0 + w - 10);
+        const cx0 = Math.floor(x / TS), cx1 = Math.floor((x + 9.99) / TS), cy0 = Math.floor(y / TS), cy1 = Math.floor((y + 9.99) / TS);
+        let ok = true;
+        for (let cy = cy0; cy <= cy1 && ok; cy++) for (let cx = cx0; cx <= cx1; cx++) if (s.solidForItem(cx, cy)) { ok = false; break; }
+        if (!ok) continue;
+        for (const it of near) if (aabbOverlap(it.x, it.y, it.w, it.h, x, y, 10, 10)) { ok = false; break; }
+        if (ok) return { x, y };
+      }
+    }
+    return null;
   }
 
   hatchBlocked(s, o) {
@@ -542,12 +582,16 @@ class World {
       for (const m in r.cost) o.mats[m] -= r.cost[m];
       o.started = true; o.stalled = false; o.progress = 0;
     }
-    o.progress += dt;
+    o.progress = Math.min(r.t, o.progress + dt);
     if (o.progress >= r.t) {
-      for (let i = 0; i < r.n; i++) {
-        s.spawnItem(r.out, 1, (o.x + 1) * TS + rand(-4, 4), (o.y + 0.5) * TS, rand(-50, 50), -rand(80, 160));
+      const spot = this.fabOutputSpot(s, o, r.out, r.n);
+      if (!spot) { o.blocked = true; return; }   // sem espaço: espera liberar
+      o.blocked = false;
+      if (spot.it) spot.it.n += r.n;
+      else {
+        const it = s.spawnItem(r.out, r.n, spot.x + 5, spot.y + 5, 0, 0);
+        it.x = spot.x; it.y = spot.y;
       }
-      this.mergeItemsNear(s, (o.x + 1) * TS, (o.y + 1) * TS);
       o.started = false; o.progress = 0;
       if (q.left !== Infinity && q.left !== null) q.left--;
       if (q.left !== Infinity && q.left !== null && q.left <= 0) o.queue.shift();

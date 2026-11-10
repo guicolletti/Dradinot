@@ -189,7 +189,7 @@ function drawObjectShape(ctx, o, w, h, icon = false) {
     case 'fab_starter': case 'fab_munitions': case 'fab_engineering': case 'fab_machine': case 'fab_equipment': {
       box(c);
       ctx.fillStyle = '#1a2028'; ctx.fillRect(w * 0.15, h * 0.18, w * 0.7, h * 0.36);
-      ctx.fillStyle = o.queue && o.queue.length ? (o.stalled ? '#ff6060' : '#6effa0') : '#3a5a6a';
+      ctx.fillStyle = o.queue && o.queue.length ? (o.stalled ? '#ff6060' : o.blocked ? '#ffb040' : '#6effa0') : '#3a5a6a';
       ctx.fillRect(w * 0.2, h * 0.24, w * 0.6 * (o.started ? Math.min(1, (o.progress || 0) / RECIPES[d.fab][o.queue[0].r].t) : 0.15), h * 0.08);
       // ícone do tipo
       ctx.fillStyle = shade(c, 0.5);

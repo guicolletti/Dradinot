@@ -273,7 +273,7 @@ class UI {
   refreshFab() {
     const o = this.objById(this.fabOid);
     if (!o) return;
-    const key = JSON.stringify([o.mats, o.queue, o.started, o.stalled, Math.round((o.progress || 0) * 10)]);
+    const key = JSON.stringify([o.mats, o.queue, o.started, o.stalled, o.blocked, Math.round((o.progress || 0) * 10)]);
     if (key === this._fabKey) return;
     this._fabKey = key;
     $('#fab-mats').innerHTML = FAB_MATS.map((m) => `<div class="mat"><img src="${iconURL(m)}"><div class="bar"><i style="width:${(o.mats[m] / FAB_CAP) * 100}%;background:${ITEMS[m].color}"></i></div><span>${o.mats[m]}/${FAB_CAP}</span></div>`).join('');
@@ -287,6 +287,7 @@ class UI {
       const inf = e.left === Infinity || e.left === null;
       d.innerHTML = `<img src="${iconURL(r.out)}"><span>${inf ? '∞' : '×' + e.left}</span><div class="bar"><i style="width:${prog}%"></i></div>`;
       if (k === 0 && o.stalled) d.classList.add('stalled');
+      if (k === 0 && o.blocked) d.classList.add('blocked');
       d.title = 'Clique para remover';
       d.onclick = () => this.g.send({ t: 'fab', op: 'rm', k });
       q.appendChild(d);

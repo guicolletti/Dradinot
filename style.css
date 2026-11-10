@@ -95,6 +95,8 @@ button { font-family: inherit; cursor: pointer; }
 .qitem img { width: 20px; height: 20px; }
 .qitem.stalled .bar i { background: #ff6060; }
 .qitem.stalled::after { content: 'sem material'; color: #ff8080; font-size: 11px; }
+.qitem.blocked .bar i { background: #ffb040; }
+.qitem.blocked::after { content: 'sem espaço'; color: #ffc070; font-size: 11px; }
 #storage-grid { display: grid; grid-template-columns: repeat(6, 48px); gap: 5px; justify-content: center; margin-bottom: 8px; }
 #panel-equip { width: 260px; }
 #equip-slots { display: flex; gap: 20px; justify-content: center; margin: 6px 0 10px; }
