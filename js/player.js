@@ -4,7 +4,7 @@
 // ============================================================
 'use strict';
 
-const GRAVITY = 1500;
+const GRAVITY = 700;
 const REACH = TS * 7;
 
 // Movimento com colisão contra a grade da nave (usado por jogador e itens)
@@ -33,11 +33,11 @@ function collideMove(e, ship, dt, forItem, dropping) {
     const cy = Math.floor((e.y + e.h - 0.01) / TS);
     for (let cx = x0; cx <= x1; cx++) {
       const plat = !dropping && ship.platformAt(cx, cy) && prevBottom <= cy * TS + 0.5;
-      if (solid(cx, cy) || plat) { e.y = cy * TS - e.h; hitY = true; e.onGround = true; break; }
+      if (solid(cx, cy) || plat) { e.y = cy * TS - e.h; e.vy = 0; hitY = true; e.onGround = true; break; }
     }
   } else {
     const cy = Math.floor(e.y / TS);
-    for (let cx = x0; cx <= x1; cx++) if (solid(cx, cy)) { e.y = (cy + 1) * TS; hitY = true; break; }
+    for (let cx = x0; cx <= x1; cx++) if (solid(cx, cy)) { e.y = (cy + 1) * TS; e.vy = 0; hitY = true; break; }
   }
   return { hitX, hitY };
 }
@@ -117,7 +117,7 @@ class Player {
     if (this.mode !== 'walk') { this.vx = 0; this.vy = 0; return; }
     const speedMul = this.equip.feet === 'speed' ? 1.5 : 1;
     const jumpMul = this.equip.feet === 'boots' ? 1.35 : 1;
-    const run = 150 * speedMul;
+    const run = 120 * speedMul;
 
     // escadas
     const cx = Math.floor(this.cxL / TS);
@@ -142,7 +142,7 @@ class Player {
       else this.vx += sign(target - this.vx) * acc * dt;
 
       if (input.jumpPressed && this.onGround) {
-        this.vy = -300 * jumpMul;
+        this.vy = -200 * jumpMul;
         this.jumpT = 0.22;
       }
       let g = GRAVITY;
@@ -159,7 +159,9 @@ class Player {
       this.vy += g * dt;
       if (input.downPressed && this.onGround) this.dropT = 0.2;
       this.dropT -= dt;
-      collideMove(this, s, dt, false, this.dropT > 0 || (input.down && !this.onGround));
+      const goingUp = this.vy < 0;
+      const hit = collideMove(this, s, dt, false, this.dropT > 0 || (input.down && !this.onGround));
+      if (hit.hitY && goingUp) this.jumpT = 0; // bateu no teto: encerra o pulo
     }
     if (this.vx !== 0) this.facing = sign(this.vx);
     this.walkAnim += Math.abs(this.vx) * dt * 0.08;
