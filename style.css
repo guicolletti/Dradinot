@@ -22,15 +22,15 @@ button { font-family: inherit; cursor: pointer; }
 
 /* HUD */
 #hud-tl { position: fixed; left: 12px; top: 10px; background: rgba(8,14,22,0.72); border: 1px solid #2c3a4c; border-radius: 8px; padding: 8px 12px; min-width: 250px; pointer-events: none; }
-#hud-zone { font-size: 17px; margin-bottom: 6px; }
+#hud-zone { font-size: 19px; margin-bottom: 6px; }
 #hud-zone small { color: #9fb0c2; font-size: 12px; }
 .bars { display: flex; flex-direction: column; gap: 4px; }
-.barbox { position: relative; height: 16px; background: #1a222c; border-radius: 3px; overflow: hidden; }
+.barbox { position: relative; height: 18px; background: #1a222c; border-radius: 3px; overflow: hidden; }
 .barbox .fill { position: absolute; left: 0; top: 0; bottom: 0; transition: width 0.15s; }
 .fill.shield { background: linear-gradient(#5fc0ff, #2a7ac0); }
 .fill.hull { background: linear-gradient(#8fe08f, #3f9a3f); }
-.barbox span { position: relative; font-size: 11px; padding-left: 6px; line-height: 16px; text-shadow: 0 1px 2px #000; }
-#hud-info { font-size: 12px; color: #9fb0c2; margin-top: 5px; }
+.barbox span { position: relative; font-size: 12px; padding-left: 6px; line-height: 18px; text-shadow: 0 1px 2px #000; }
+#hud-info { font-size: 13px; color: #9fb0c2; margin-top: 5px; }
 
 #hud-tr { position: fixed; right: 12px; top: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; z-index: 5; }
 #minimap { width: 200px; height: 200px; border: 1px solid #2c3a4c; border-radius: 6px; image-rendering: pixelated; cursor: zoom-in; background: #050a14; }
@@ -46,27 +46,27 @@ button { font-family: inherit; cursor: pointer; }
 @keyframes banner { 0% { opacity: 0; transform: translateY(-10px); } 12% { opacity: 1; transform: none; } 75% { opacity: 1; } 100% { opacity: 0; } }
 
 #bottom { position: fixed; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 5px; }
-#hint { font-size: 13px; background: rgba(8,14,22,0.7); padding: 4px 12px; border-radius: 5px; min-height: 0; pointer-events: none; text-align: center; max-width: 80vw; }
+#hint { font-size: 15px; background: rgba(8,14,22,0.7); padding: 4px 12px; border-radius: 5px; min-height: 0; pointer-events: none; text-align: center; max-width: 80vw; }
 #hint:empty { display: none; }
 #hint .hl { color: #ffd84a; font-weight: bold; }
-#held-name { font-size: 13px; font-weight: bold; text-shadow: 0 1px 3px #000; pointer-events: none; min-height: 16px; }
+#held-name { font-size: 15px; font-weight: bold; text-shadow: 0 1px 3px #000; pointer-events: none; min-height: 16px; }
 #hotbar { display: flex; gap: 4px; background: rgba(8,14,22,0.75); padding: 5px; border-radius: 8px; border: 1px solid #2c3a4c; }
-.slot { position: relative; width: 48px; height: 48px; background: #1a2430; border: 2px solid #33445a; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.slot { position: relative; width: 58px; height: 58px; background: #1a2430; border: 2px solid #33445a; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .slot:hover { border-color: #5a7090; }
 .slot.sel { border-color: #f0c27a; background: #2a2a20; box-shadow: 0 0 8px #f0c27a66; }
-.slot img { width: 38px; height: 38px; pointer-events: none; }
-.slot .cnt { position: absolute; right: 3px; bottom: 1px; font-size: 12px; font-weight: bold; text-shadow: 0 0 3px #000, 0 0 3px #000; pointer-events: none; }
+.slot img { width: 46px; height: 46px; pointer-events: none; }
+.slot .cnt { position: absolute; right: 4px; bottom: 1px; font-size: 14px; font-weight: bold; text-shadow: 0 0 3px #000, 0 0 3px #000; pointer-events: none; }
 .slot .key { position: absolute; left: 3px; top: 0; font-size: 10px; color: #7a8a9a; pointer-events: none; }
 
 #chat { position: fixed; left: 12px; bottom: 12px; width: 420px; max-width: 40vw; }
-#chat-log { max-height: 220px; overflow-y: auto; font-size: 13px; display: flex; flex-direction: column; gap: 2px; pointer-events: none; scrollbar-width: none; }
+#chat-log { max-height: 240px; overflow-y: auto; font-size: 15px; display: flex; flex-direction: column; gap: 2px; pointer-events: none; scrollbar-width: none; }
 #chat.open #chat-log { pointer-events: auto; background: rgba(8,14,22,0.6); }
 #chat-log .line { text-shadow: 0 1px 2px #000, 0 0 4px #000; transition: opacity 0.8s; padding: 0 4px; }
 #chat-log .line.faded { opacity: 0; }
 #chat-input { width: 100%; margin-top: 4px; padding: 7px 10px; background: rgba(8,14,22,0.92); border: 1px solid #4a5868; color: #fff; border-radius: 5px; outline: none; font-size: 14px; }
 
 /* painéis */
-.panel { position: fixed; right: 226px; top: 12px; width: 380px; max-height: calc(100vh - 150px); overflow-y: auto; background: rgba(12,18,28,0.95); border: 2px solid #3a4a60; border-radius: 10px; padding: 10px 12px; z-index: 20; box-shadow: 0 8px 30px #000a; }
+.panel { position: fixed; right: 226px; top: 12px; width: 440px; max-height: calc(100vh - 150px); overflow-y: auto; background: rgba(12,18,28,0.95); border: 2px solid #3a4a60; border-radius: 10px; padding: 10px 12px; z-index: 20; box-shadow: 0 8px 30px #000a; }
 .phead { display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 16px; margin-bottom: 8px; }
 .phead button { background: none; border: none; color: #aab; font-size: 18px; }
 .ptitle { font-size: 12px; color: #9fb0c2; margin: 8px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
@@ -97,7 +97,7 @@ button { font-family: inherit; cursor: pointer; }
 .qitem.stalled::after { content: 'sem material'; color: #ff8080; font-size: 11px; }
 .qitem.blocked .bar i { background: #ffb040; }
 .qitem.blocked::after { content: 'sem espaço'; color: #ffc070; font-size: 11px; }
-#storage-grid { display: grid; grid-template-columns: repeat(6, 48px); gap: 5px; justify-content: center; margin-bottom: 8px; }
+#storage-grid { display: grid; grid-template-columns: repeat(6, 58px); gap: 5px; justify-content: center; margin-bottom: 8px; }
 #panel-equip { width: 260px; }
 #equip-slots { display: flex; gap: 20px; justify-content: center; margin: 6px 0 10px; }
 .eq { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; color: #9fb0c2; }
@@ -137,3 +137,9 @@ button { font-family: inherit; cursor: pointer; }
 #title-msg, #menu-msg { min-height: 20px; margin: 6px 0; font-size: 14px; text-align: center; }
 .menu-foot { display: flex; justify-content: flex-end; gap: 8px; }
 .title-box button.small { padding: 6px 12px; font-size: 13px; background: #2a3a50; color: #dde; box-shadow: none; }
+
+#btn-copy { pointer-events: auto; margin-top: 7px; padding: 5px 12px; font-size: 13px; font-weight: bold; color: #1a1006; background: #f0c27a; border: none; border-radius: 5px; box-shadow: 0 2px 0 #7a4a18; }
+#btn-copy:hover { background: #ffd590; }
+#hud-tl { min-width: 280px; box-shadow: 0 4px 18px #0008; }
+#hotbar { box-shadow: 0 4px 18px #0008; }
+.slot { background: linear-gradient(#202c3a, #151d28); }

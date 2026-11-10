@@ -25,11 +25,33 @@ class UI {
     $('#help-close').onclick = () => this.toggleHelp(false);
     $('#death-btn').onclick = () => { $('#death').classList.add('hidden'); this.g.send({ t: 'menu' }); };
     $('#btn-help').onclick = () => this.toggleHelp();
+    $('#btn-copy').onclick = () => this.copyCode();
     $('#btn-equip').onclick = () => this.toggleEquip();
     $('#btn-leave').onclick = () => { if (confirm('Sair da nave e voltar ao menu de naves?')) this.g.send({ t: 'leave' }); };
     $('#btn-sound').onclick = () => { SFX.enabled = !SFX.enabled; $('#btn-sound').textContent = SFX.enabled ? '🔊' : '🔇'; };
     document.querySelectorAll('.panel .close').forEach((b) => { b.onclick = () => this.closeAll(); });
     $('#minimap').addEventListener('click', () => this.toggleBigMap());
+  }
+
+  copyCode() {
+    const code = this.g.key, b = $('#btn-copy');
+    if (!code) return;
+    b.blur();
+    const done = () => {
+      this.chatLine(`Código ${code} copiado! Envie para quem vai entrar na nave.`, '#ffd84a');
+      b.textContent = '✔ Copiado!';
+      setTimeout(() => { b.textContent = '📋 Copiar código'; }, 1600);
+    };
+    const fallback = () => {
+      const ta = el('textarea'); ta.value = code; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      ta.remove();
+      if (ok) done(); else this.chatLine(`Não deu para copiar automaticamente. Código: ${code}`, '#ffb070');
+    };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(code).then(done, fallback);
+    else fallback();
   }
 
   // ---------- título ----------

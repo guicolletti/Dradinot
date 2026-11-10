@@ -13,6 +13,8 @@ class Game {
     this.renderer = new Renderer(this, this.canvas);
     this.ui = new UI(this);
     this.cam = { x: 0, y: 0, zoom: 1.4, targetZoom: 1.4 };
+    this.zoomWalk = 3;       // zoom a pé (dentro da nave)
+    this.zoomFly = 1.5;      // zoom pilotando ou na torreta
     this.keys = {};
     this.pressed = {};
     this.mouse = { x: innerWidth / 2, y: innerHeight / 2, left: false, right: false, leftPressed: false };
@@ -93,7 +95,6 @@ class Game {
       case 'joined':
         this.pid = m.pid; this.sid = m.sid; this.key = m.key; this.captain = m.captain;
         this.state = 'play';
-        this.cam.targetZoom = 1.4;
         this.ui.onStart();
         break;
       case 'zone':
@@ -270,7 +271,9 @@ class Game {
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
     cv.addEventListener('wheel', (e) => {
       e.preventDefault();
-      this.cam.targetZoom = clamp(this.cam.targetZoom * (e.deltaY > 0 ? 0.88 : 1.13), 0.3, 3);
+      const f = e.deltaY > 0 ? 0.88 : 1.13;
+      if (this.running && this.player.mode === 'walk') this.zoomWalk = clamp(this.zoomWalk * f, 0.6, 6);
+      else if (this.running) this.zoomFly = clamp(this.zoomFly * f, 0.3, 4);
     }, { passive: false });
   }
 
@@ -375,6 +378,7 @@ class Game {
     const p = this.player, s = this.ship, c = this.cam;
     let tx, ty;
     if (this.running) {
+      c.targetZoom = p.mode === 'walk' ? this.zoomWalk : this.zoomFly;
       if (p.mode === 'walk') { tx = s.x + p.cxL; ty = s.y + p.cyL; }
       else {
         const mx = this.mouseWorld.x - s.cx, my = this.mouseWorld.y - s.cy;
@@ -388,12 +392,13 @@ class Game {
       c.x = s.x + c.ox; c.y = s.y + c.oy;
     } else {
       c.ox = undefined; c.oy = undefined;
+      c.targetZoom = 0.5;
       tx = this.world.size / 2 + Math.cos(this.time * 0.05) * 800;
       ty = this.world.size / 2 + Math.sin(this.time * 0.04) * 600;
       const k = Math.min(1, dt * 2);
       c.x += (tx - c.x) * k; c.y += (ty - c.y) * k;
     }
-    c.zoom += (c.targetZoom - c.zoom) * Math.min(1, dt * 10);
+    c.zoom += (c.targetZoom - c.zoom) * Math.min(1, dt * 6);
   }
 
   // ---------- auxiliares só de leitura (dicas e pré-visualização) ----------

@@ -131,18 +131,27 @@ function drawItemIcon(ctx, id, x, y, s, rot = 0) {
 // tiles da nave (canto superior esquerdo x,y, tamanho s)
 function drawTileShape(ctx, t, x, y, s) {
   switch (t) {
-    case T.BLOCK:
-      ctx.fillStyle = '#6e7885'; ctx.fillRect(x, y, s, s);
-      ctx.fillStyle = '#8b96a3'; ctx.fillRect(x, y, s, s * 0.14); ctx.fillRect(x, y, s * 0.14, s);
-      ctx.fillStyle = '#4c545e'; ctx.fillRect(x, y + s * 0.86, s, s * 0.14); ctx.fillRect(x + s * 0.86, y, s * 0.14, s);
-      ctx.fillStyle = '#5c6570'; ctx.fillRect(x + s * 0.35, y + s * 0.35, s * 0.3, s * 0.3);
+    case T.BLOCK: {
+      const g = ctx.createLinearGradient(x, y, x + s, y + s);
+      g.addColorStop(0, '#8f9aa8'); g.addColorStop(1, '#56606b');
+      ctx.fillStyle = g; ctx.fillRect(x, y, s, s);
+      ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.fillRect(x, y, s, s * 0.1); ctx.fillRect(x, y, s * 0.1, s);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(x, y + s * 0.9, s, s * 0.1); ctx.fillRect(x + s * 0.9, y, s * 0.1, s);
+      ctx.fillStyle = 'rgba(0,0,0,0.16)'; ctx.fillRect(x + s * 0.28, y + s * 0.28, s * 0.44, s * 0.44);
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      for (const [rx, ry] of [[0.18, 0.18], [0.76, 0.18], [0.18, 0.76], [0.76, 0.76]]) ctx.fillRect(x + s * rx, y + s * ry, s * 0.07, s * 0.07);
       break;
-    case T.WALKWAY:
-      ctx.fillStyle = '#8a6438'; ctx.fillRect(x, y, s, s * 0.28);
-      ctx.fillStyle = '#b08250'; ctx.fillRect(x, y, s, s * 0.08);
-      ctx.fillStyle = 'rgba(90,60,30,0.6)';
-      ctx.fillRect(x + s * 0.1, y + s * 0.28, s * 0.1, s * 0.25); ctx.fillRect(x + s * 0.8, y + s * 0.28, s * 0.1, s * 0.25);
+    }
+    case T.WALKWAY: {
+      const g = ctx.createLinearGradient(x, y, x, y + s * 0.3);
+      g.addColorStop(0, '#c2925a'); g.addColorStop(1, '#7d5830');
+      ctx.fillStyle = g; ctx.fillRect(x, y, s, s * 0.3);
+      ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(x, y, s, s * 0.06);
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(x + s * 0.48, y + s * 0.06, s * 0.04, s * 0.24);
+      ctx.fillStyle = 'rgba(70,45,22,0.75)';
+      ctx.fillRect(x + s * 0.1, y + s * 0.3, s * 0.1, s * 0.24); ctx.fillRect(x + s * 0.8, y + s * 0.3, s * 0.1, s * 0.24);
       break;
+    }
     case T.LADDER:
       ctx.fillStyle = '#9a7442';
       ctx.fillRect(x + s * 0.15, y, s * 0.12, s); ctx.fillRect(x + s * 0.73, y, s * 0.12, s);
@@ -261,4 +270,20 @@ function iconURL(id) {
   drawItemIcon(x, id, 32, 32, 52);
   ICON_CACHE[id] = c.toDataURL();
   return ICON_CACHE[id];
+}
+
+// ---------- auxiliares de desenho ----------
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+function rrect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
 }
