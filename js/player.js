@@ -68,6 +68,8 @@ function invCount(inv, item) {
 
 class Player {
   constructor(ship) {
+    this.id = uid();
+    this.tp = 0;              // contador de teletransporte (cliente re-sincroniza)
     this.ship = ship;
     this.w = 10; this.h = 22;
     this.vx = 0; this.vy = 0;
@@ -89,6 +91,7 @@ class Player {
   }
 
   respawn() {
+    this.tp++;
     const sp = this.ship.objectsOf('spawn')[0];
     if (sp) {
       this.x = sp.x * TS + 3; this.y = (sp.y + 2) * TS - this.h - 0.1;

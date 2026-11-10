@@ -1,0 +1,9 @@
+# Deploy de um clique no Render.com (Blueprint)
+services:
+  - type: web
+    name: couracado
+    runtime: node
+    plan: free
+    buildCommand: echo "sem dependências"
+    startCommand: node server/server.js
+    healthCheckPath: /status

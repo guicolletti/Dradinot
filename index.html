@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Couraçado — aeronaves no espaço profundo</title>
 <link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect x=%221%22 y=%224%22 width=%2214%22 height=%229%22 fill=%22%2356637a%22/%3E%3Crect x=%223%22 y=%226%22 width=%2210%22 height=%225%22 fill=%22%231b2129%22/%3E%3Ccircle cx=%228%22 cy=%223%22 r=%222%22 fill=%22%23e8853a%22/%3E%3C/svg%3E">
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -13,19 +14,39 @@
 <div id="title">
   <div class="title-box">
     <h1>COURAÇADO</h1>
-    <p class="sub">Construa sua aeronave bloco a bloco, tripule, pilote e lute no espaço profundo.</p>
+    <p class="sub">Construa sua aeronave bloco a bloco, chame a tripulação, pilote e lute no espaço profundo.</p>
     <input id="name-input" maxlength="16" placeholder="Seu nome" autocomplete="off">
     <div class="btns">
-      <button id="btn-play">Nova nave</button>
-      <button id="btn-continue" class="hidden">Continuar (salvo)</button>
+      <button id="btn-offline">Jogar offline</button>
     </div>
+    <div class="online-box">
+      <input id="server-input" placeholder="Endereço do servidor (ex.: meu-jogo.onrender.com)" autocomplete="off">
+      <button id="btn-online">Jogar online</button>
+    </div>
+    <div id="title-msg"></div>
     <div class="quick">
       <div><kbd>WASD</kbd> andar / pilotar</div>
       <div><kbd>Espaço</kbd> pular (segure para mais alto)</div>
       <div><kbd>Clique</kbd> usar item / interagir</div>
       <div><kbd>1-0</kbd> trocar item • <kbd>Q</kbd> soltar</div>
       <div><kbd>H</kbd> ajuda completa</div>
+      <div><kbd>Enter</kbd> chat • <kbd>/convite</kbd></div>
     </div>
+  </div>
+</div>
+
+<!-- Menu de naves -->
+<div id="shipmenu" class="hidden">
+  <div class="title-box menu-box">
+    <h2>Naves</h2>
+    <div id="menu-mode" class="muted"></div>
+    <div id="menu-list"></div>
+    <div class="menu-actions">
+      <button id="menu-create">Criar nova nave</button>
+      <div class="joincode"><input id="code-input" maxlength="8" placeholder="Código" autocomplete="off"><button id="menu-join">Entrar</button></div>
+    </div>
+    <div id="menu-msg"></div>
+    <div class="menu-foot"><button id="menu-refresh" class="small">Atualizar</button><button id="menu-back" class="small">Voltar</button></div>
   </div>
 </div>
 
@@ -42,6 +63,7 @@
   <div id="hud-tr">
     <canvas id="minimap" width="200" height="200" title="Clique (ou M) para ampliar"></canvas>
     <div class="tbtns">
+      <button id="btn-leave" title="Sair da nave">🚪</button>
       <button id="btn-equip" title="Equipamento (I)">🎒</button>
       <button id="btn-sound" title="Som">🔊</button>
       <button id="btn-help" title="Ajuda (H)">?</button>
@@ -116,7 +138,9 @@
         <p>Com escudo zerado, as balas danificam o interior e o casco. Casco zerado = nave destruída (e o jogo salvo é perdido!). Use <b>Reforços de Escudo</b>, <b>Kits de Reparo</b> e <b>Geradores de Escudo</b>.</p>
         <h3>Zonas</h3>
         <p>O <b>Porto Livre</b> é seguro e é onde o jogo é salvo. Voe sobre um portal e aperte <kbd>Q</kbd> no leme para viajar. Pardal, Falcão e as zonas de missão têm naves piratas.</p>
-        <p class="muted">Comandos: /help, /save, /zonas, /nome, /stats, /cheats</p>
+        <h3>Online</h3>
+        <p>Cada nave tem um <b>código de convite</b> (<kbd>/convite</kbd>). Amigos entram na sua nave com o código, ou pela lista se ela for pública (<kbd>/publica</kbd>). Nas zonas JxJ (Pardal, Falcão e missões) naves de jogadores diferentes podem se atacar.</p>
+        <p class="muted">Comandos: /help, /convite, /publica, /expulsar NOME, /navenome NOME, /tripulacao, /save, /zonas, /nome, /stats, /cheats (offline)</p>
       </div>
     </div>
   </div>
@@ -127,7 +151,7 @@
   <div class="title-box">
     <h1 style="color:#ff6a4a">NAVE DESTRUÍDA</h1>
     <p id="death-stats"></p>
-    <button id="death-btn">Nova nave</button>
+    <button id="death-btn">Voltar ao menu de naves</button>
   </div>
 </div>
 
@@ -141,6 +165,9 @@
 <script src="js/player.js"></script>
 <script src="js/ai.js"></script>
 <script src="js/world.js"></script>
+<script src="js/actions.js"></script>
+<script src="js/universe.js"></script>
+<script src="js/net.js"></script>
 <script src="js/icons.js"></script>
 <script src="js/render.js"></script>
 <script src="js/ui.js"></script>

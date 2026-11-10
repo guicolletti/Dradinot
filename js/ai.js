@@ -59,7 +59,7 @@ function updateBot(world, b, dt) {
       b.cool = d.rof * rand(0.9, 1.4) + (d.burst ? 1.4 : 0);
       world.fireBullet(b.x + Math.cos(b.angle) * b.r, b.y + Math.sin(b.angle) * b.r, b.angle, d.ammo, 'bot', b.id);
       if (d.burst) { b.burstLeft = d.burst - 1; b.burstT = 0.12; }
-      world.game.sfx('botshoot', b.x, b.y);
+      world.sound('botshoot', b.x, b.y);
     }
   } else {
     b.wander += rand(-1, 1) * dt;
@@ -100,12 +100,13 @@ function hitBot(world, bot, b) {
   if (a.knock) { bot.vx += (b.vx / sp) * a.knock * 1.5; bot.vy += (b.vy / sp) * a.knock * 1.5; }
   else { bot.vx += (b.vx / sp) * 40; bot.vy += (b.vy / sp) * 40; }
   world.spark(b.x, b.y, BOTS[bot.type].color, 6);
-  world.game.sfx('bothit', b.x, b.y);
+  world.sound('bothit', b.x, b.y);
   if (bot.hp <= 0 && !bot.dead) {
     bot.dead = true;
     world.explosion(bot.x, bot.y, bot.r / 24);
     world.spawnCrate(bot.x, bot.y, LOOT_TABLES[BOTS[bot.type].drops]());
-    world.game.stats.bots++;
+    const killer = world.shipById(b.ownerId);
+    if (killer && killer.stats) killer.stats.bots++;
   }
 }
 
@@ -153,11 +154,15 @@ function buildPirateShip(size) {
 
 function updatePirate(world, s, dt) {
   const ai = s.ai;
-  const ps = world.game.ship;
   let target = null;
-  if (ps && !ps.dead && !world.zone.safe) {
-    const d = dist(s.cx, s.cy, ps.cx, ps.cy);
-    if (d < 2000 || ai.aggro > 0) target = ps;
+  if (!world.zone.safe) {
+    let best = Infinity;
+    for (const ps of world.ships) {
+      if (ps.team !== 'player' || ps.dead) continue;
+      let d = dist(s.cx, s.cy, ps.cx, ps.cy);
+      if (ps.id === s.lastAttacker) d *= 0.5;
+      if ((d < 2000 || (ai.aggro > 0 && ps.id === s.lastAttacker)) && d < best) { best = d; target = ps; }
+    }
   }
   ai.aggro = Math.max(0, ai.aggro - dt);
   if (s.lastHit !== undefined && s.lastHit < 0.1) ai.aggro = 15;

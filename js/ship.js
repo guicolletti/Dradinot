@@ -26,6 +26,10 @@ class Ship {
     this.dead = false;
     this.hitFlash = 0;
     this.color = opts.color || '#56637a';
+    this.key = opts.key || null;
+    this.rev = 0;
+    this.stats = { bots: 0, ships: 0 };
+    this.crew = [];
     this.buildHull();
     this.recalc();
     this.shield = this.maxShield;
@@ -43,6 +47,7 @@ class Ship {
     const i = this.idx(x, y);
     this.tiles[i] = t;
     this.tileHp[i] = TILE_INFO[t].hp || 0;
+    this.rev++;
   }
 
   buildHull() {
@@ -137,6 +142,7 @@ class Ship {
     if (type === 'hatch') o.mode = o.mode || 'all';
     if (type === 'hatch' || type === 'ejector') o.cool = 0;
     this.objects.push(o);
+    this.rev++;
     this.rebuildObjMap();
     this.recalc();
     return o;
@@ -145,6 +151,7 @@ class Ship {
   removeObject(o) {
     const i = this.objects.indexOf(o);
     if (i >= 0) this.objects.splice(i, 1);
+    this.rev++;
     this.rebuildObjMap();
     this.recalc();
   }
@@ -179,8 +186,16 @@ class Ship {
       angle: SIDE_ANGLE[side], cool: 0, burstLeft: 0, burstT: 0, hp: 60,
     }, extra);
     this.turrets.push(t);
+    this.rev++;
     this.recalc();
     return t;
+  }
+
+  removeTurret(t) {
+    const i = this.turrets.indexOf(t);
+    if (i >= 0) this.turrets.splice(i, 1);
+    this.rev++;
+    this.recalc();
   }
 
   turretAtHull(cx, cy) {
@@ -292,6 +307,7 @@ class Ship {
           const i = this.idx(cx, cy);
           this.tileHp[i] -= dmg;
           if (this.tileHp[i] <= 0) { this.set(cx, cy, T.EMPTY); this.recalc(); }
+          else this.rev++;
           return {};
         }
       }
@@ -310,7 +326,51 @@ class Ship {
       items: this.items.map((i) => ({ item: i.item, n: i.n, x: i.x, y: i.y })),
       cargoQueue: this.cargoQueue.slice(),
       shield: this.shield, integrity: this.integrity,
+      stats: this.stats, color: this.color,
     };
+  }
+
+  // ---------- rede ----------
+  // estrutura (enviada só quando rev muda)
+  netStruct() {
+    let tiles = '';
+    for (let i = 0; i < this.tiles.length; i++) tiles += this.tiles[i];
+    const thp = [];
+    for (let i = 0; i < this.tiles.length; i++) {
+      const t = this.tiles[i];
+      if (t && t !== T.HULL && this.tileHp[i] < TILE_INFO[t].hp) thp.push([i, Math.round(this.tileHp[i])]);
+    }
+    return {
+      id: this.id, name: this.name, team: this.team, color: this.color, boss: !!this.boss,
+      w: this.w, h: this.h, tiles, thp, tu: this.turrets.map((t) => [t.type, t.side, t.pos]), rev: this.rev,
+    };
+  }
+
+  static fromStruct(d) {
+    const s = new Ship(d.w, d.h, { name: d.name, team: d.team, color: d.color });
+    s.id = d.id;
+    s.applyStruct(d);
+    return s;
+  }
+
+  applyStruct(d) {
+    this.name = d.name; this.team = d.team; this.color = d.color; this.boss = d.boss;
+    if (d.w !== this.w || d.h !== this.h) {
+      this.w = d.w; this.h = d.h;
+      this.tiles = new Uint8Array(d.w * d.h);
+      this.tileHp = new Float32Array(d.w * d.h);
+      this.objMap = new Int32Array(d.w * d.h).fill(-1);
+    }
+    for (let i = 0; i < d.tiles.length; i++) { const t = d.tiles.charCodeAt(i) - 48; this.tiles[i] = t; this.tileHp[i] = TILE_INFO[t].hp || 0; }
+    for (const [i, hp] of d.thp) this.tileHp[i] = hp;
+    const old = this.turrets;
+    this.turrets = d.tu.map(([type, side, pos], k) => {
+      const prev = old[k] && old[k].side === side && old[k].pos === pos ? old[k] : null;
+      return prev ? Object.assign(prev, { type }) : { id: uid(), type, side, pos, ammoType: null, ammo: 0, angle: SIDE_ANGLE[side], cool: 0, recoil: 0 };
+    });
+    this.rebuildObjMap();
+    this.recalc();
+    this.rev = d.rev;
   }
 
   static deserialize(d) {
@@ -325,6 +385,8 @@ class Ship {
     for (const t of d.turrets) s.placeTurret(t.type, t.side, t.pos, { ammoType: t.ammoType, ammo: t.ammo });
     for (const i of d.items) s.items.push({ id: uid(), item: i.item, n: i.n, x: i.x, y: i.y, w: 10, h: 10, vx: 0, vy: 0, age: 0, rot: 0 });
     s.cargoQueue = d.cargoQueue || [];
+    if (d.stats) s.stats = d.stats;
+    if (d.color) s.color = d.color;
     s.recalc();
     s.shield = Math.min(d.shield, s.maxShield);
     s.integrity = Math.min(d.integrity, s.maxIntegrity);

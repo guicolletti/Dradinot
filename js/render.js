@@ -165,7 +165,7 @@ class Renderer {
   drawCrate(ctx, c) {
     if (!this.inView(c.x - 20, c.y - 20, 40, 40)) return;
     ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rot);
-    const rare = c.items.some(([i]) => RARE_ITEMS.has(i));
+    const rare = c.rare !== undefined ? c.rare : c.items.some(([i]) => RARE_ITEMS.has(i));
     ctx.fillStyle = rare ? '#3a8a4a' : '#7a5a30'; ctx.fillRect(-11, -11, 22, 22);
     ctx.fillStyle = rare ? '#5aca6a' : '#a07a48'; ctx.fillRect(-9, -9, 18, 18);
     ctx.strokeStyle = rare ? '#2a6a3a' : '#5a3a18'; ctx.lineWidth = 2;
@@ -207,7 +207,7 @@ class Renderer {
     for (const o of s.objects) {
       const d = OBJECTS[o.type];
       ctx.save(); ctx.translate(o.x * TS, o.y * TS);
-      if (o.type === 'helm' && s.pilot) o.spin = (o.spin || 0) + (s.thrust.x * 0.05);
+      if (o.type === 'helm') { s._helmSpin = (s._helmSpin || 0) + (s.thrustX || 0) * 0.05; o.spin = s._helmSpin; }
       drawObjectShape(ctx, o, d.w * TS, d.h * TS);
       if (o.hp < d.hp) {
         ctx.fillStyle = '#300'; ctx.fillRect(0, -4, d.w * TS, 3);
@@ -258,6 +258,10 @@ class Renderer {
       ctx.restore();
     }
     // tripulação
+    for (const c of s.crewNet || []) {
+      if (s === g.ship && c.id === g.pid) continue;
+      this.drawPlayer(ctx, c);
+    }
     if (s === g.ship && g.player) this.drawPlayer(ctx, g.player);
     if (s.team === 'pirate') this.drawPirateCrew(ctx, s);
     // flash de dano
@@ -304,7 +308,7 @@ class Renderer {
     // item na mão
     const h = p.held;
     if (h && p.mode === 'walk') {
-      const ang = this.game.aimAngle || 0;
+      const ang = p === this.game.player ? (this.game.aimAngle || 0) : (p.aim || 0);
       drawItemIcon(ctx, h.item, p.cxL + Math.cos(ang) * 9, p.cyL + 1 + Math.sin(ang) * 6, 9);
     }
     // nome
@@ -319,7 +323,7 @@ class Renderer {
     ctx.fillStyle = '#4fb4ff'; ctx.fillRect(x, y, w * (s.shield / s.maxShield), 5);
     ctx.fillStyle = s.integrity / s.maxIntegrity > 0.35 ? '#7fe07f' : '#ff6a4a';
     ctx.fillRect(x, y + 6, w * clamp(s.integrity / s.maxIntegrity, 0, 1), 4);
-    ctx.fillStyle = s.team === 'player' ? '#ffffff' : '#ff9a9a';
+    ctx.fillStyle = s === this.game.ship ? '#ffffff' : s.team === 'player' ? '#9fe8ff' : '#ff9a9a';
     ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(s.name, s.cx, y - 5);
   }
@@ -434,7 +438,10 @@ class Renderer {
       ctx.restore();
       if (label) { ctx.fillStyle = color; ctx.font = '11px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(label, px, py - 14); }
     };
-    for (const sh of w.ships) if (sh.team === 'pirate' && dist(sh.cx, sh.cy, s.cx, s.cy) < 2600) mark(sh.cx, sh.cy, '#ff6a6a', sh.name);
+    for (const sh of w.ships) {
+      if (sh === s || dist(sh.cx, sh.cy, s.cx, s.cy) > 2600) continue;
+      mark(sh.cx, sh.cy, sh.team === 'pirate' ? '#ff6a6a' : w.zone.pvp ? '#ffb05a' : '#7fe0ff', sh.name);
+    }
     if (g.player && g.player.mode !== 'helm') { /* nada */ }
   }
 
@@ -466,7 +473,7 @@ class Renderer {
     for (const b of w.bots) { m.fillStyle = BOTS[b.type].color; m.fillRect(b.x * k - 1, b.y * k - 1, 2, 2); }
     for (const c of w.crates) { m.fillStyle = '#d0a060'; m.fillRect(c.x * k - 1, c.y * k - 1, 2, 2); }
     for (const s of w.ships) {
-      m.fillStyle = s === g.ship ? '#ffffff' : '#ff5050';
+      m.fillStyle = s === g.ship ? '#ffffff' : s.team === 'player' ? '#5fd8ff' : '#ff5050';
       m.fillRect(s.x * k - 1, s.y * k - 1, Math.max(3, s.pw * k), Math.max(3, s.ph * k));
     }
     // vista da câmera

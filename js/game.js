@@ -1,10 +1,11 @@
 // ============================================================
-//  Jogo: laço principal, entrada, ações do jogador, câmera,
-//  viagens entre zonas, salvamento.
+//  Cliente do jogo: conexão, espelho do estado recebido,
+//  predição do movimento do tripulante, entrada, câmera.
+//  A simulação de verdade roda no Universe (servidor ou local).
 // ============================================================
 'use strict';
 
-const SAVE_KEY = 'couracado_save_v1';
+const INPUT_RATE = 1 / 30;
 
 class Game {
   constructor() {
@@ -20,109 +21,221 @@ class Game {
     this.shakeAmt = 0;
     this.resizeAxis = 'x';
     this.wrench = null;
-    this.stats = { bots: 0, ships: 0, time: 0, zones: new Set() };
-    this.cheats = false;
-    this.running = false;
-    this.saveTimer = 0;
+    this.state = 'title';      // title | menu | play | dead
+    this.transport = null;
+    this.ships = new Map();
+    this.ship = null;
+    this.player = null;
+    this.pid = null; this.sid = null; this.key = null;
+    this.captain = false;
+    this.inputT = 0;
+    this.token = getToken();
     this.bindInput();
     addEventListener('resize', () => this.renderer.resize());
+    addEventListener('beforeunload', () => { if (this.transport) this.transport.close(); });
     this.renderer.resize();
-    // mundo de fundo para a tela de título
+    // mundo decorativo para a tela de título
     this.world = new World('hummingbird', this);
-    this.cam.x = this.world.size / 2; this.cam.y = this.world.size / 2; this.cam.zoom = 0.5;
+    this.cam.x = this.world.size / 2; this.cam.y = this.world.size / 2; this.cam.zoom = this.cam.targetZoom = 0.5;
     this.last = performance.now();
     requestAnimationFrame((t) => this.frame(t));
   }
 
-  // ---------- início / salvamento ----------
-  hasSave() { try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; } }
+  get running() { return this.state === 'play' && !!this.ship && !!this.player; }
 
-  start(fromSave, name) {
+  // ---------- conexão ----------
+  connect(kind, addr) {
     SFX.init();
-    let data = null;
-    if (fromSave) { try { data = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { data = null; } }
-    this.world = new World('freeport', this);
-    if (data) {
-      this.ship = Ship.deserialize(data.ship);
-      this.player = new Player(this.ship);
-      this.player.inv = data.player.inv;
-      this.player.equip = data.player.equip || { feet: null, back: null };
-      this.player.sel = data.player.sel || 0;
-      this.player.name = data.player.name || name || 'Você';
-      if (data.stats) { this.stats.bots = data.stats.bots || 0; this.stats.ships = data.stats.ships || 0; this.stats.time = data.stats.time || 0; }
-      this.notify('Jogo carregado. Bem-vindo de volta ao Porto Livre!', '#9fe0ff');
-    } else {
-      this.ship = buildStarterShip();
-      this.player = new Player(this.ship);
-      this.player.name = name || 'Você';
-      invAdd(this.player.inv, 'wrench', 1);
-      invAdd(this.player.inv, 'ammo_standard', 8);
-      invAdd(this.player.inv, 'block', 16);
-      invAdd(this.player.inv, 'walkway', 8);
-      invAdd(this.player.inv, 'booster', 2);
-      this.stats = { bots: 0, ships: 0, time: 0, zones: new Set() };
-      this.notify('Nova nave criada! Aperte H para ver os controles.', '#9fe0ff');
+    if (this.transport) this.transport.close();
+    const onMsg = (m) => this.onMessage(m);
+    if (kind === 'offline') this.transport = new LocalTransport(onMsg);
+    else {
+      const url = wsURL(addr);
+      if (!url) { this.ui.titleError('Digite o endereço do servidor.'); return; }
+      try { this.transport = new WSTransport(url, onMsg); } catch (e) { this.ui.titleError('Endereço inválido.'); return; }
+      this.transport.onError = () => this.ui.titleError('Não foi possível conectar ao servidor.');
+      this.transport.onClose = () => this.onDisconnect();
     }
-    this.ship.name = data ? this.ship.name : `Nave de ${this.player.name}`;
-    const spot = this.world.findOpenSpot(this.ship.pw, this.ship.ph, 150);
-    this.world.addShip(this.ship, spot.x, spot.y);
-    this.cam.x = this.ship.cx; this.cam.y = this.ship.cy; this.cam.zoom = 1.4; this.cam.targetZoom = 1.4;
-    this.stats.zones.add('freeport');
-    this.running = true;
-    this.ui.onStart();
-    this.save();
+    this.ui.titleStatus(kind === 'offline' ? 'Iniciando...' : 'Conectando...');
+    this.transport.onOpen = () => this.send({ t: 'hello', name: this.ui.playerName(), token: this.token });
   }
 
-  save(manual = false) {
-    if (!this.running || !this.ship || this.ship.dead) return;
-    if (!this.world.zone.safe) { if (manual) this.notify('Só é possível salvar no Porto Livre (zona segura).', '#ffb070'); return; }
+  disconnect() {
+    if (this.transport) { const t = this.transport; this.transport = null; t.close(); }
+    this.clearPlay();
+    this.state = 'title';
+    this.ui.showTitle();
+  }
+
+  onDisconnect() {
+    this.transport = null;
+    this.clearPlay();
+    this.state = 'title';
+    this.ui.showTitle();
+    this.ui.titleError('Conexão com o servidor perdida.');
+  }
+
+  send(m) { if (this.transport) this.transport.send(m); }
+
+  clearPlay() {
+    this.ship = null; this.player = null; this.ships = new Map();
+    this.pid = this.sid = this.key = null;
+    this.ui.closeAll(true);
+  }
+
+  onMessage(m) {
+    switch (m.t) {
+      case 'menu':
+        this.clearPlay();
+        this.state = 'menu';
+        this.ui.showMenu(m, this.transport && this.transport.kind);
+        break;
+      case 'joined':
+        this.pid = m.pid; this.sid = m.sid; this.key = m.key; this.captain = m.captain;
+        this.state = 'play';
+        this.cam.targetZoom = 1.4;
+        this.ui.onStart();
+        break;
+      case 'zone':
+        this.world = new World(m.id, this, { mirror: m });
+        this.ships = new Map();
+        this.ship = null;
+        this.renderer.terrainDirty = true;
+        this.ui.zoneBanner(this.world.zone);
+        break;
+      case 's': if (this.state === 'play') this.applySnapshot(m); break;
+      case 'msg': this.ui.chatLine(m.m, m.c); break;
+      case 'chat': this.ui.chatLine(`<b style="color:${m.mine ? '#9fe0ff' : '#ffd0a0'}">${this.ui.esc(m.n)}</b> <small>[${this.ui.esc(m.s)}]</small>: ${this.ui.esc(m.m)}`, '#fff', true); break;
+      case 'sfx': SFX.play(m.n, 1); break;
+      case 'ui':
+        if (m.op === 'fab') this.ui.openFab(m.oid);
+        else if (m.op === 'store') this.ui.openStorage(m.oid);
+        else this.ui.closeAll(true);
+        break;
+      case 'dead':
+        this.state = 'dead';
+        this.ship = null; this.player = null;
+        this.ui.showDeath(m.stats);
+        break;
+      case 'err': this.ui.menuError(m.m); break;
+    }
+  }
+
+  // ---------- espelho do estado ----------
+  applySnapshot(m) {
+    const now = this.time;
+    const w = this.world;
+    for (const st of m.st) {
+      const s = this.ships.get(st.id);
+      if (s) s.applyStruct(st);
+      else { const ns = Ship.fromStruct(st); ns.crewNet = []; ns.fresh = true; this.ships.set(st.id, ns); }
+    }
+    for (const [id, objs] of m.ob) {
+      const s = this.ships.get(id);
+      if (!s) continue;
+      s.objects = objs;
+      for (const o of objs) if (o.queue) for (const q of o.queue) if (q.left === null) q.left = Infinity;
+      s.rebuildObjMap();
+    }
+    const list = [];
+    for (const d of m.sh) {
+      const s = this.ships.get(d[0]);
+      if (!s) continue;
+      list.push(s);
+      if (s.fresh) { s.x = d[1]; s.y = d[2]; s.fresh = false; }
+      s.sx = d[1]; s.sy = d[2]; s.vx = d[3]; s.vy = d[4]; s.rt = now;
+      s.shield = d[5]; s.integrity = d[6]; s.maxShield = d[7]; s.maxIntegrity = d[8];
+      s.hitFlash = d[9]; s.thrustX = d[10];
+      d[11].forEach((td, i) => {
+        const t = s.turrets[i];
+        if (!t) return;
+        t.netAngle = td[0]; t.ammo = td[1]; t.ammoType = td[2] || null; t.recoil = td[3];
+        if (t.angle === undefined || !t.predicted) t.angle = td[0];
+      });
+      if (d.length > 13) {
+        const prev = new Map(s.items.map((it) => [it.id, it]));
+        s.items = d[13].map(([id, item, n, x, y, rot]) => {
+          const p = prev.get(id);
+          return { id, item, n, tx: x, ty: y, x: p ? p.x : x, y: p ? p.y : y, rot, w: 10, h: 10 };
+        });
+        const pc = new Map((s.crewNet || []).map((c) => [c.id, c]));
+        s.crewNet = d[14].map(([id, name, x, y, f, og, wa, mode, held, feet, back, jet, aim]) => {
+          const p = pc.get(id);
+          return {
+            id, name, tx: x, ty: y, x: p ? p.x : x, y: p ? p.y : y, w: 10, h: 22, facing: f, onGround: !!og, walkAnim: wa, mode,
+            held: held ? { item: held, n: 1 } : null, equip: { feet: feet || null, back: back || null }, jetting: !!jet, aim,
+            get cxL() { return this.x + 5; }, get cyL() { return this.y + 11; },
+          };
+        });
+        s.cargoN = d[15]; s.key = d[16];
+      }
+    }
+    for (const s of this.ships.values()) if (!list.includes(s)) this.ships.delete(s.id);
+    w.ships = list;
+
+    // bots e caixas com suavização
+    const pb = new Map(w.bots.map((b) => [b.id, b]));
+    w.bots = m.bo.map(([id, type, x, y, vx, vy, angle, hp, maxHp, flash, rot]) => {
+      const p = pb.get(id);
+      return { id, type, sx: x, sy: y, x: p ? p.x : x, y: p ? p.y : y, vx, vy, rt: now, angle, hp, maxHp, flash, rot, r: BOTS[type].r };
+    });
+    const pcr = new Map(w.crates.map((c) => [c.id, c]));
+    w.crates = m.cr.map(([id, x, y, vx, vy, rot, item, rare]) => {
+      const p = pcr.get(id);
+      return { id, sx: x, sy: y, x: p ? p.x : x, y: p ? p.y : y, vx, vy, rt: now, rot, items: [[item, 1]], rare: !!rare };
+    });
+    w.bullets = m.bu.map(([x, y, vx, vy, ammo, r]) => ({ x, y, vx, vy, ammo, r }));
+    if (m.tc.length) { w.applyTileChanges(m.tc); this.renderer.terrainDirty = true; }
+    w.playFx(m.fx);
+
+    // eu
+    this.ship = this.ships.get(this.sid) || null;
+    if (!this.ship) return;
+    const me = m.me;
+    if (!this.player) {
+      this.player = new Player(this.ship);
+      this.player.name = this.ui.playerName();
+      this.player.tp = -1;
+    }
     const p = this.player;
-    const data = {
-      v: 1,
-      ship: this.ship.serialize(),
-      player: { inv: p.inv, equip: p.equip, sel: p.sel, name: p.name },
-      stats: { bots: this.stats.bots, ships: this.stats.ships, time: this.stats.time },
-    };
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); if (manual) this.notify('Nave salva!', '#9fe0ff'); }
-    catch (e) { if (manual) this.notify('Falha ao salvar: ' + e.message, '#ff7070'); }
+    p.ship = this.ship;
+    if (me.inv) { p.inv = me.inv; this.ui.renderInv(); }
+    if (me.eq) { p.equip = me.eq; this.ui.renderEquip(); }
+    const modeChanged = p.mode !== me.mode;
+    p.mode = me.mode;
+    if (me.tp !== p.tp || me.mode !== 'walk') {
+      p.x = me.x; p.y = me.y;
+      if (me.tp !== p.tp) { p.vx = 0; p.vy = 0; }
+      p.tp = me.tp;
+    }
+    p.ctrl = !me.ctrl ? null : me.ctrl.k === 't' ? this.ship.turrets[me.ctrl.i] || null : this.ship.objects.find((o) => o.id === me.ctrl.id) || null;
+    this.resizeAxis = me.rax;
+    this.wrench = me.wr ? { lx: me.wr[0], ly: me.wr[1], t: me.wr[2], need: me.wr[3] } : null;
+    this.captain = me.cap; this.isPublic = me.pub;
+    if (modeChanged) this.ui.renderInv();
   }
 
-  onPlayerShipDestroyed() {
-    this.exitControl();
-    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ }
-    this.ui.showDeath();
-    this.player = null;
-    this.running = false;
+  // suaviza uma entidade em direção à posição do servidor
+  smooth(e, dt, k = 12) {
+    if (e.sx === undefined) return;
+    const age = Math.min(0.25, this.time - e.rt);
+    const tx = e.sx + e.vx * age, ty = e.sy + e.vy * age;
+    e.x += e.vx * dt; e.y += e.vy * dt;
+    if (Math.abs(tx - e.x) > 300 || Math.abs(ty - e.y) > 300) { e.x = tx; e.y = ty; return; }
+    const f = Math.min(1, dt * k);
+    e.x += (tx - e.x) * f; e.y += (ty - e.y) * f;
   }
 
-  // ---------- viagem entre zonas ----------
-  travel(zoneId) {
-    const old = this.world;
-    old.ships = old.ships.filter((s) => s !== this.ship);
-    this.world = new World(zoneId, this);
-    this.renderer.terrainDirty = true;
-    const spot = this.world.findOpenSpot(this.ship.pw, this.ship.ph, 200);
-    this.world.addShip(this.ship, spot.x, spot.y);
-    this.cam.x = this.ship.cx; this.cam.y = this.ship.cy;
-    this.stats.zones.add(zoneId);
-    const z = this.world.zone;
-    this.ui.zoneBanner(z);
-    this.notify(`Entrando em ${z.name}. ${z.desc}`, z.safe ? '#9fe0ff' : z.pvp ? '#ff9a7a' : '#d0ffa0');
-    SFX.play('portal', 1);
-    if (z.safe) this.save();
-  }
-
-  // ---------- utilidades ----------
-  notify(msg, color = '#fff') { this.ui.chatLine(msg, color); }
+  // ---------- utilidades usadas pelo mundo-espelho ----------
   shake(a, x, y) {
     const d = x !== undefined ? dist(x, y, this.cam.x, this.cam.y) : 0;
-    const f = clamp(1 - d / 1600, 0, 1);
-    this.shakeAmt = Math.max(this.shakeAmt, a * f);
+    this.shakeAmt = Math.max(this.shakeAmt, a * clamp(1 - d / 1600, 0, 1));
   }
   sfx(name, x, y) {
     const d = x !== undefined ? dist(x, y, this.cam.x, this.cam.y) : 0;
     SFX.play(name, clamp(1 - d / 1500, 0, 1));
   }
+  notify(msg, color) { this.ui.chatLine(msg, color); }
 
   // ---------- entrada ----------
   bindInput() {
@@ -132,12 +245,14 @@ class Game {
         else if (e.code === 'Escape') this.ui.closeChat();
         return;
       }
-      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+        if (e.code === 'Enter' && this.state === 'title') this.ui.clickOffline();
+        return;
+      }
       if (!this.keys[e.code]) this.pressed[e.code] = true;
       this.keys[e.code] = true;
       if (['Space', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.code)) e.preventDefault();
       if (this.running) this.onKey(e);
-      else if (e.code === 'Enter' && this.ui.titleOpen) this.ui.clickPlay();
     });
     addEventListener('keyup', (e) => { this.keys[e.code] = false; });
     addEventListener('blur', () => { this.keys = {}; this.mouse.left = false; this.mouse.right = false; });
@@ -146,7 +261,7 @@ class Game {
     cv.addEventListener('mousedown', (e) => {
       SFX.init();
       if (e.button === 0) { this.mouse.left = true; this.mouse.leftPressed = true; }
-      if (e.button === 2) { this.mouse.right = true; this.onRightClick(); }
+      if (e.button === 2) { this.mouse.right = true; this.wrench = null; this.ui.closeAll(); }
     });
     addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouse.left = false;
@@ -161,53 +276,23 @@ class Game {
 
   onKey(e) {
     const p = this.player;
-    if (!p) return;
     const c = e.code;
     if (c === 'Enter') { this.ui.openChat(); e.preventDefault(); return; }
     if (c === 'Slash') { this.ui.openChat('/'); e.preventDefault(); return; }
     if (c === 'KeyH' || c === 'F1') { this.ui.toggleHelp(); e.preventDefault(); return; }
     if (c === 'Escape') {
       if (this.ui.closeAll()) return;
-      if (p.mode !== 'walk') this.exitControl();
+      this.send({ t: 'key', c });
       return;
     }
     if (c.startsWith('Digit')) {
       const n = c === 'Digit0' ? 9 : parseInt(c.slice(5), 10) - 1;
-      if (n >= 0 && n < 10) { p.sel = n; this.wrench = null; this.ui.renderInv(); }
+      if (n >= 0 && n < 10) { p.sel = n; this.ui.renderInv(); }
       return;
     }
     if (c === 'KeyI') { this.ui.toggleEquip(); return; }
     if (c === 'KeyM') { this.ui.toggleBigMap(); return; }
-    if (p.mode === 'helm') {
-      if (c === 'Space') this.exitControl();
-      if (c === 'KeyQ') this.tryPortal();
-      return;
-    }
-    if (p.mode === 'turret') {
-      if (c === 'Space') this.exitControl();
-      if (c === 'KeyQ') this.unloadTurret(p.ctrl);
-      return;
-    }
-    if (c === 'KeyQ') this.dropHeld(e.shiftKey);
-    if (c === 'KeyR') {
-      const h = p.held;
-      if (h && (h.item === 'embiggener' || h.item === 'shrinker')) {
-        this.resizeAxis = this.resizeAxis === 'x' ? 'y' : 'x';
-        this.notify(`Eixo de redimensionamento: ${this.resizeAxis === 'x' ? 'horizontal (direita)' : 'vertical (cima)'}`, '#cfe');
-      }
-    }
-  }
-
-  onRightClick() {
-    this.wrench = null;
-    this.ui.closeAll();
-  }
-
-  exitControl() {
-    const p = this.player;
-    if (!p) return;
-    if (p.mode === 'helm' && this.ship) { this.ship.pilot = null; this.ship.thrust.x = 0; this.ship.thrust.y = 0; }
-    p.mode = 'walk'; p.ctrl = null;
+    if (c === 'KeyQ' || c === 'KeyR' || (c === 'Space' && p.mode !== 'walk')) this.send({ t: 'key', c, sh: e.shiftKey });
   }
 
   // ---------- laço ----------
@@ -215,6 +300,7 @@ class Game {
     let dt = (t - this.last) / 1000;
     this.last = t;
     dt = Math.min(dt, 0.05);
+    if (this.transport) this.transport.update(dt);
     this.acc = (this.acc || 0) + dt;
     const step = 1 / 60;
     let n = 0;
@@ -229,57 +315,57 @@ class Game {
     this.time += dt;
     this.shakeAmt = Math.max(0, this.shakeAmt - dt * 30);
     this.mouseWorld = this.renderer.toWorld(this.mouse.x, this.mouse.y);
+    const w = this.world;
+    // suavização das entidades
+    for (const s of w.ships) {
+      this.smooth(s, dt);
+      for (const it of s.items) if (it.tx !== undefined) { it.x += (it.tx - it.x) * Math.min(1, dt * 15); it.y += (it.ty - it.y) * Math.min(1, dt * 15); }
+      for (const c of s.crewNet || []) { c.x += (c.tx - c.x) * Math.min(1, dt * 15); c.y += (c.ty - c.y) * Math.min(1, dt * 15); }
+      for (const t of s.turrets) if (t.netAngle !== undefined && !t.predicted) t.angle += angDiff(t.angle, t.netAngle) * Math.min(1, dt * 15);
+    }
+    for (const b of w.bots) this.smooth(b, dt);
+    for (const c of w.crates) { this.smooth(c, dt, 6); }
+    for (const b of w.bullets) { b.x += b.vx * dt; b.y += b.vy * dt; }
+    w.updateParticles(dt);
+
     const p = this.player, s = this.ship;
-    if (this.running && p && s && !s.dead) {
-      this.stats.time += dt;
-      const uiBlock = this.ui.blocking();
+    if (this.running) {
+      const typing = this.ui.typing();
       const input = {
-        left: !!(this.keys.KeyA || this.keys.ArrowLeft), right: !!(this.keys.KeyD || this.keys.ArrowRight),
-        up: !!(this.keys.KeyW || this.keys.ArrowUp), down: !!(this.keys.KeyS || this.keys.ArrowDown),
-        jump: !!this.keys.Space, jumpPressed: !!this.pressed.Space,
-        downPressed: !!(this.pressed.KeyS || this.pressed.ArrowDown),
+        left: !typing && !!(this.keys.KeyA || this.keys.ArrowLeft), right: !typing && !!(this.keys.KeyD || this.keys.ArrowRight),
+        up: !typing && !!(this.keys.KeyW || this.keys.ArrowUp), down: !typing && !!(this.keys.KeyS || this.keys.ArrowDown),
+        jump: !typing && !!this.keys.Space, jumpPressed: !typing && !!this.pressed.Space,
+        downPressed: !typing && !!(this.pressed.KeyS || this.pressed.ArrowDown),
       };
-      if (uiBlock && this.ui.typing()) { for (const k in input) input[k] = false; }
       const lx = this.mouseWorld.x - s.x, ly = this.mouseWorld.y - s.y;
       this.aimAngle = Math.atan2(ly - p.cyL, lx - p.cxL);
-
       if (p.mode === 'walk') {
+        const wasGround = p.onGround;
         p.update(dt, input);
-        if (input.jumpPressed && p.onGround === false && p.vy < -200) this.sfx('jump');
-        if (this.mouse.leftPressed && !this.ui.mouseOverUI) this.primaryClick(lx, ly);
-        if (this.mouse.left && this.wrench) this.updateWrench(dt, lx, ly);
-        else this.wrench = null;
-      } else if (p.mode === 'helm') {
-        s.thrust.x = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-        s.thrust.y = (input.down ? 1 : 0) - (input.up ? 1 : 0);
-        const l = Math.hypot(s.thrust.x, s.thrust.y);
-        if (l > 1) { s.thrust.x /= l; s.thrust.y /= l; }
-        for (const t of s.turrets) {
-          if (!TURRETS[t.type].rc) continue;
-          const tw = s.turretWorld(t);
-          const a = s.clampTurretAngle(t, Math.atan2(this.mouseWorld.y - tw.y, this.mouseWorld.x - tw.x));
-          t.angle += clamp(angDiff(t.angle, a), -8 * dt, 8 * dt);
-          if (this.mouse.left && !this.ui.mouseOverUI) this.world.fireTurret(s, t);
-        }
-        if (!s.objects.includes(p.ctrl)) this.exitControl();
-      } else if (p.mode === 'turret') {
-        const t = p.ctrl;
-        if (!s.turrets.includes(t)) this.exitControl();
-        else {
-          const tw = s.turretWorld(t);
-          const a = s.clampTurretAngle(t, Math.atan2(this.mouseWorld.y - tw.y, this.mouseWorld.x - tw.x));
-          t.angle += clamp(angDiff(t.angle, a), -10 * dt, 10 * dt);
-          const d = TURRETS[t.type];
-          if (this.mouse.left && !this.ui.mouseOverUI && (d.auto || this.mouse.leftPressed || t.cool <= 0)) this.world.fireTurret(s, t);
-        }
+        if (input.jumpPressed && wasGround) this.sfx('jump');
+        if (this.mouse.leftPressed && !this.ui.mouseOverUI) this.send({ t: 'click', lx: r1(lx), ly: r1(ly), sh: !!(this.keys.ShiftLeft || this.keys.ShiftRight) });
       }
-      // autosave no porto
-      if (this.world.zone.safe) {
-        this.saveTimer -= dt;
-        if (this.saveTimer <= 0) { this.save(); this.saveTimer = 8; }
+      // predição visual da mira das torretas
+      for (const t of s.turrets) t.predicted = false;
+      const aimT = (t) => {
+        const tw = s.turretWorld(t);
+        t.angle = s.clampTurretAngle(t, Math.atan2(this.mouseWorld.y - tw.y, this.mouseWorld.x - tw.x));
+        t.predicted = true;
+      };
+      if (p.mode === 'helm') for (const t of s.turrets) { if (TURRETS[t.type].rc) aimT(t); }
+      if (p.mode === 'turret' && p.ctrl) aimT(p.ctrl);
+      // envia entrada
+      this.inputT -= dt;
+      if (this.inputT <= 0) {
+        this.inputT = INPUT_RATE;
+        const k = (input.left ? 1 : 0) | (input.right ? 2 : 0) | (input.up ? 4 : 0) | (input.down ? 8 : 0) | (input.jump ? 16 : 0);
+        this.send({
+          t: 'in', tp: p.tp, x: r1(p.x), y: r1(p.y), vx: r1(p.vx), vy: r1(p.vy), f: p.facing, og: p.onGround ? 1 : 0, ol: p.onLadder ? 1 : 0,
+          wa: r1(p.walkAnim), jet: p.jetting ? 1 : 0, k, mx: r1(this.mouseWorld.x), my: r1(this.mouseWorld.y), lx: r1(lx), ly: r1(ly),
+          ml: this.mouse.left && !this.ui.mouseOverUI ? 1 : 0, sel: p.sel, a: r1(this.aimAngle),
+        });
       }
     }
-    this.world.update(dt);
     this.updateCamera(dt);
     this.mouse.leftPressed = false;
     this.pressed = {};
@@ -287,372 +373,51 @@ class Game {
 
   updateCamera(dt) {
     const p = this.player, s = this.ship, c = this.cam;
-    let tx = c.x, ty = c.y;
-    if (this.running && s && p) {
+    let tx, ty;
+    if (this.running) {
       if (p.mode === 'walk') { tx = s.x + p.cxL; ty = s.y + p.cyL; }
       else {
         const mx = this.mouseWorld.x - s.cx, my = this.mouseWorld.y - s.cy;
         tx = s.cx + clamp(mx, -600, 600) * 0.25; ty = s.cy + clamp(my, -400, 400) * 0.25;
         if (p.mode === 'turret') { tx = (tx + s.x + p.cxL) / 2; ty = (ty + s.y + p.cyL) / 2; }
       }
+      // segue a nave sem atraso; suaviza só o deslocamento interno
+      const k = Math.min(1, dt * 10);
+      c.ox = (c.ox === undefined ? tx - s.x : c.ox) + ((tx - s.x) - (c.ox === undefined ? tx - s.x : c.ox)) * k;
+      c.oy = (c.oy === undefined ? ty - s.y : c.oy) + ((ty - s.y) - (c.oy === undefined ? ty - s.y : c.oy)) * k;
+      c.x = s.x + c.ox; c.y = s.y + c.oy;
     } else {
+      c.ox = undefined; c.oy = undefined;
       tx = this.world.size / 2 + Math.cos(this.time * 0.05) * 800;
       ty = this.world.size / 2 + Math.sin(this.time * 0.04) * 600;
+      const k = Math.min(1, dt * 2);
+      c.x += (tx - c.x) * k; c.y += (ty - c.y) * k;
     }
-    const k = Math.min(1, dt * 8);
-    c.x += (tx - c.x) * k + (s && this.running ? s.vx * dt * (1 - k) : 0);
-    c.y += (ty - c.y) * k + (s && this.running ? s.vy * dt * (1 - k) : 0);
     c.zoom += (c.targetZoom - c.zoom) * Math.min(1, dt * 10);
   }
 
-  // ---------- ações do jogador ----------
+  // ---------- auxiliares só de leitura (dicas e pré-visualização) ----------
   inReach(lx, ly) { const p = this.player; return dist(p.cxL, p.cyL, lx, ly) <= REACH; }
-
   canPlaceTile(cx, cy) {
     const s = this.ship, p = this.player;
     if (!s.isInterior(cx, cy)) return false;
     if (s.get(cx, cy) !== T.EMPTY || s.objectAt(cx, cy)) return false;
     const h = p.held;
-    if (h && ITEMS[h.item].tile === T.BLOCK) {
-      if (aabbOverlap(p.x, p.y, p.w, p.h, cx * TS, cy * TS, TS, TS)) return false;
-    }
+    if (h && ITEMS[h.item].tile === T.BLOCK && aabbOverlap(p.x, p.y, p.w, p.h, cx * TS, cy * TS, TS, TS)) return false;
     return true;
   }
-
-  consumeHeld(n = 1) {
-    const p = this.player, h = p.held;
-    if (!h) return;
-    h.n -= n;
-    if (h.n <= 0) p.inv[p.sel] = null;
-    this.ui.renderInv();
-  }
-
-  giveItem(item, n, lx, ly) {
-    const p = this.player;
-    const rest = invAdd(p.inv, item, n);
-    if (rest > 0) this.ship.spawnItem(item, rest, lx ?? p.cxL, ly ?? p.cyL, 0, -60);
-    this.ui.renderInv();
-  }
-
   itemUnder(lx, ly) {
-    const s = this.ship;
     let best = null, bd = 12;
-    for (const it of s.items) {
+    for (const it of this.ship.items) {
       const d = dist(lx, ly, it.x + it.w / 2, it.y + it.h / 2);
       if (d < bd) { bd = d; best = it; }
     }
     return best;
   }
-
-  primaryClick(lx, ly) {
-    const p = this.player, s = this.ship;
-    const cx = Math.floor(lx / TS), cy = Math.floor(ly / TS);
-    const reach = this.inReach(lx, ly);
-    const h = p.held;
-    const d = h ? ITEMS[h.item] : null;
-    const turret = s.turretAtHull(cx, cy) || this.turretNear(lx, ly);
-    const obj = s.objectAt(cx, cy);
-    const item = this.itemUnder(lx, ly);
-
-    if (!reach) {
-      if (h || obj || turret || item) { this.notify('Muito longe.', '#aaa'); this.sfx('error'); }
-      return;
-    }
-
-    // triturador destrói itens soltos
-    if (d && d.tool === 'shredder') {
-      if (item) {
-        s.items.splice(s.items.indexOf(item), 1);
-        this.world.spark(s.x + lx, s.y + ly, '#ff7070', 8);
-        this.sfx('break');
-      }
-      return;
-    }
-
-    // pegar item solto
-    if (item) {
-      const rest = invAdd(p.inv, item.item, item.n);
-      if (rest === item.n) { this.notify('Inventário cheio.', '#ffb070'); this.sfx('error'); return; }
-      if (rest > 0) item.n = rest; else s.items.splice(s.items.indexOf(item), 1);
-      this.sfx('collect');
-      this.ui.renderInv();
-      return;
-    }
-
-    // chave inglesa: segurar para desmontar
-    if (d && d.tool === 'wrench') {
-      this.wrench = { cx, cy, t: 0, need: 0, key: null };
-      return;
-    }
-
-    // usos específicos do item em alvos
-    if (d && turret && d.kind === 'ammo') { this.loadTurret(turret, h); return; }
-    if (d && obj) {
-      const od = OBJECTS[obj.type];
-      if (od.fab && FAB_MATS.includes(h.item)) { this.loadFab(obj, h); return; }
-      if (obj.type === 'shield_gen' && (h.item === 'booster' || h.item === 'flux')) {
-        obj.fuel = (obj.fuel || 0) + (h.item === 'booster' ? 60 : 300);
-        this.consumeHeld(1);
-        this.sfx('load');
-        this.notify(`Gerador de escudo: ${Math.round(obj.fuel)} de carga.`, '#9fe0ff');
-        return;
-      }
-      if (obj.type === 'recycler') { this.recycle(obj, h); return; }
-      if (obj.type === 'ejector') { this.eject(obj, h); return; }
-      if (obj.type === 'expando') { this.ui.openStorage(obj); return; }
-    }
-
-    // interagir
-    if (turret) { this.controlTurret(turret); return; }
-    if (obj) { this.interact(obj); return; }
-
-    // colocação / uso geral
-    if (d) this.useHeld(lx, ly, cx, cy);
-  }
-
   turretNear(lx, ly) {
     const s = this.ship;
-    for (const t of s.turrets) {
-      const p = s.turretLocal(t);
-      if (dist(lx, ly, p.x, p.y) < 14) return t;
-    }
+    for (const t of s.turrets) { const p = s.turretLocal(t); if (dist(lx, ly, p.x, p.y) < 14) return t; }
     return null;
   }
-
-  useHeld(lx, ly, cx, cy) {
-    const p = this.player, s = this.ship, h = p.held, d = ITEMS[h.item];
-    if (d.kind === 'tile') {
-      if (this.canPlaceTile(cx, cy)) {
-        s.set(cx, cy, d.tile); s.recalc();
-        this.consumeHeld(1); this.sfx('place');
-      } else this.sfx('error');
-    } else if (d.kind === 'object') {
-      const od = OBJECTS[d.obj];
-      const ox = cx - Math.floor((od.w - 1) / 2), oy = cy - (od.h - 1);
-      if (s.canPlaceObject(d.obj, ox, oy)) {
-        s.placeObject(d.obj, ox, oy);
-        this.consumeHeld(1); this.sfx('place');
-        this.notify(`${od.name} construído.`, '#cfe');
-      } else { this.notify(od.floor ? 'Espaço inválido (precisa de piso embaixo e área livre).' : 'Espaço inválido.', '#ffb070'); this.sfx('error'); }
-    } else if (d.kind === 'turret') {
-      const hs = s.hullCellToSide(cx, cy);
-      if (hs && s.canPlaceTurret(hs.side, hs.pos)) {
-        s.placeTurret(d.turret, hs.side, hs.pos);
-        this.consumeHeld(1); this.sfx('place');
-        this.notify(`${d.name} instalada. Carregue com munição.`, '#cfe');
-      } else { this.notify('Torretas vão no casco externo e precisam de 3 blocos de espaço.', '#ffb070'); this.sfx('error'); }
-    } else if (d.tool === 'booster') {
-      if (s.shield >= s.maxShield) { this.notify('Escudo já está cheio.', '#aaa'); return; }
-      s.shield = Math.min(s.maxShield, s.shield + 80);
-      this.consumeHeld(1); this.sfx('shield');
-      this.world.spark(s.x + lx, s.y + ly, '#7fd0ff', 12);
-    } else if (d.tool === 'repair') {
-      if (s.integrity >= s.maxIntegrity) { this.notify('O casco está intacto.', '#aaa'); return; }
-      s.integrity = Math.min(s.maxIntegrity, s.integrity + 60);
-      this.consumeHeld(1); this.sfx('place');
-    } else if (d.tool === 'embiggener' || d.tool === 'shrinker') {
-      const dir = d.tool === 'embiggener' ? 1 : -1;
-      const err = s.resize(this.resizeAxis, dir);
-      if (err) { this.notify(err, '#ffb070'); this.sfx('error'); return; }
-      if (this.resizeAxis === 'y') p.y += dir * TS;
-      this.consumeHeld(1); this.sfx('place');
-      this.notify(`Nave agora tem ${s.w}x${s.h}.`, '#cfe');
-    } else if (d.kind === 'equip') {
-      this.equipFromSlot(p.sel);
-    }
-  }
-
-  equipFromSlot(i) {
-    const p = this.player, st = p.inv[i];
-    if (!st || ITEMS[st.item].kind !== 'equip') return;
-    const slot = ITEMS[st.item].slot;
-    const old = p.equip[slot];
-    p.equip[slot] = st.item;
-    p.inv[i] = old ? { item: old, n: 1 } : null;
-    this.notify(`Equipado: ${ITEMS[st.item].name}`, '#cfe');
-    this.ui.renderInv(); this.ui.renderEquip();
-  }
-
-  unequip(slot) {
-    const p = this.player;
-    if (!p.equip[slot]) return;
-    const rest = invAdd(p.inv, p.equip[slot], 1);
-    if (rest) { this.notify('Inventário cheio.', '#ffb070'); return; }
-    p.equip[slot] = null;
-    this.ui.renderInv(); this.ui.renderEquip();
-  }
-
-  interact(o) {
-    const p = this.player, s = this.ship;
-    const od = OBJECTS[o.type];
-    switch (o.type) {
-      case 'helm':
-        if (s.pilot && s.pilot !== p) return;
-        p.mode = 'helm'; p.ctrl = o; s.pilot = p;
-        p.x = (o.x + 1) * TS - p.w / 2; p.y = (o.y + 2) * TS - p.h - 0.1; p.vx = 0; p.vy = 0;
-        this.wrench = null;
-        this.notify('Pilotando: WASD move, clique dispara torretas RC, Q usa portal, Espaço sai.', '#cfe');
-        break;
-      case 'door': o.open = !o.open; this.sfx('click'); break;
-      case 'hatch': {
-        const modes = ['all', 'none'];
-        o.mode = modes[(modes.indexOf(o.mode) + 1) % modes.length];
-        this.notify(`Escotilha: ${o.mode === 'all' ? 'liberada (verde)' : 'bloqueada (vermelha)'}`, '#cfe');
-        this.sfx('click');
-        break;
-      }
-      case 'expando': this.ui.openStorage(o); break;
-      case 'shield_gen': this.notify(`Gerador de escudo: ${Math.round(o.fuel || 0)} de carga. Use Reforços ou Fluxo nele.`, '#9fe0ff'); break;
-      case 'recycler': this.notify('Clique no reciclador segurando um item para reciclá-lo.', '#cfe'); break;
-      case 'ejector': this.notify('Clique no ejetor segurando um item para lançá-lo ao espaço.', '#cfe'); break;
-      case 'spawn': this.notify('Ponto de renascimento.', '#cfe'); break;
-      default:
-        if (od.fab) this.ui.openFab(o);
-    }
-  }
-
-  controlTurret(t) {
-    const p = this.player;
-    if (TURRETS[t.type].rc) { this.notify('Torretas RC são disparadas pelo leme.', '#ffb070'); return; }
-    p.mode = 'turret'; p.ctrl = t; this.wrench = null;
-    this.notify(`${TURRETS[t.type].name}: clique para atirar, Q descarrega, Espaço sai. Munição: ${t.ammo}`, '#cfe');
-  }
-
-  loadTurret(t, h) {
-    const p = this.player;
-    const ammoKey = ITEMS[h.item].ammo;
-    const cap = TURRETS[t.type].cap;
-    if (t.ammoType && t.ammoType !== ammoKey && t.ammo > 0) this.unloadTurret(t);
-    if (t.ammo + AMMO[ammoKey].shots > cap) { this.notify('Torreta cheia.', '#aaa'); return; }
-    let used = 0;
-    const max = this.keys.ShiftLeft || this.keys.ShiftRight ? h.n : 1;
-    while (used < max && t.ammo + AMMO[ammoKey].shots <= cap) { t.ammo += AMMO[ammoKey].shots; used++; }
-    t.ammoType = ammoKey;
-    this.consumeHeld(used);
-    this.sfx('load');
-    this.notify(`Torreta carregada: ${t.ammo}/${cap} (${AMMO[ammoKey].name})`, '#cfe');
-    void p;
-  }
-
-  unloadTurret(t) {
-    if (!t || !t.ammoType || t.ammo <= 0) { this.notify('Torreta vazia.', '#aaa'); return; }
-    const per = AMMO[t.ammoType].shots;
-    const boxes = Math.floor(t.ammo / per);
-    if (boxes > 0) this.giveItem('ammo_' + t.ammoType, boxes);
-    t.ammo = 0; t.ammoType = null;
-    this.sfx('load');
-  }
-
-  loadFab(o, h) {
-    const room = FAB_CAP - (o.mats[h.item] || 0);
-    if (room <= 0) { this.notify('Fabricador cheio desse material.', '#aaa'); return; }
-    const k = Math.min(room, h.n);
-    o.mats[h.item] = (o.mats[h.item] || 0) + k;
-    this.consumeHeld(k);
-    this.sfx('load');
-    this.ui.refreshFab();
-  }
-
-  recycle(o, h) {
-    const v = recycleValue(h.item);
-    const keys = Object.keys(v);
-    if (!keys.length) { this.notify('Esse item não pode ser reciclado.', '#ffb070'); this.sfx('error'); return; }
-    const n = h.n;
-    const lx = (o.x + 1) * TS, ly = o.y * TS;
-    for (const m of keys) {
-      const total = v[m] * n;
-      if (total > 0) this.ship.spawnItem(m, total, lx, ly, rand(-40, 40), -150);
-    }
-    this.consumeHeld(n);
-    this.sfx('break');
-  }
-
-  eject(o, h) {
-    this.world.ejectFromShip(this.ship, o, h.item, h.n);
-    this.consumeHeld(h.n);
-    this.sfx('pop');
-  }
-
-  dropHeld(one) {
-    const p = this.player, h = p.held;
-    if (!h) return;
-    const n = one ? 1 : h.n;
-    const a = this.aimAngle || 0;
-    this.ship.spawnItem(h.item, n, p.cxL + Math.cos(a) * 6, p.cyL - 2, Math.cos(a) * 320 + p.vx, Math.sin(a) * 320 - 60);
-    this.consumeHeld(n);
-  }
-
-  updateWrench(dt, lx, ly) {
-    const s = this.ship, w = this.wrench;
-    const cx = Math.floor(lx / TS), cy = Math.floor(ly / TS);
-    if (!this.inReach(lx, ly)) { this.wrench = null; return; }
-    const turret = s.turretAtHull(cx, cy) || this.turretNear(lx, ly);
-    const obj = s.objectAt(cx, cy);
-    let key = null, need = 0;
-    if (turret) { key = 't' + turret.id; need = 1.2; }
-    else if (obj) { key = 'o' + obj.id; need = 1.0; }
-    else if (s.isInterior(cx, cy) && s.get(cx, cy) !== T.EMPTY) { key = `c${cx},${cy}`; need = 0.25; }
-    if (!key) { w.t = 0; return; }
-    if (w.key !== key) { w.key = key; w.t = 0; w.need = need; }
-    w.t += dt;
-    if (w.t < w.need) return;
-    // desmonta
-    if (turret) {
-      if (turret.ammoType && turret.ammo > 0) this.unloadTurret(turret);
-      s.turrets.splice(s.turrets.indexOf(turret), 1); s.recalc();
-      this.giveItem(turret.type, 1, lx, ly);
-    } else if (obj) {
-      if (obj === this.player.ctrl) this.exitControl();
-      if (obj.mats) for (const m of FAB_MATS) if (obj.mats[m] > 0) s.spawnItem(m, obj.mats[m], lx, ly, rand(-40, 40), -100);
-      if (obj.inv) for (const st of obj.inv) if (st) s.spawnItem(st.item, st.n, lx, ly, rand(-60, 60), -120);
-      if (this.ui.storageObj === obj || this.ui.fabObj === obj) this.ui.closeAll();
-      s.removeObject(obj);
-      this.giveItem(obj.type, 1, lx, ly);
-    } else {
-      const t = s.get(cx, cy);
-      s.set(cx, cy, T.EMPTY); s.recalc();
-      this.giveItem(TILE_INFO[t].item, 1, lx, ly);
-    }
-    this.sfx('break');
-    this.world.spark(s.x + lx, s.y + ly, '#ffd84a', 6);
-    w.key = null; w.t = 0;
-  }
-
-  tryPortal() {
-    const s = this.ship;
-    for (const p of this.world.portals) {
-      const nx = clamp(p.x, s.x, s.x + s.pw), ny = clamp(p.y, s.y, s.y + s.ph);
-      if (dist(nx, ny, p.x, p.y) < p.r) {
-        const z = ZONES[p.target];
-        if (z.mission && !this.world.zone.safe && this.world.zone.pvp === false) { /* livre */ }
-        this.travel(p.target);
-        return;
-      }
-    }
-    this.notify('Voe sobre um portal e aperte Q para atravessar.', '#aaa');
-  }
-
-  // ---------- chat / comandos ----------
-  command(text) {
-    const [cmd, ...args] = text.trim().split(/\s+/);
-    switch (cmd.toLowerCase()) {
-      case '/help': case '/ajuda':
-        this.notify('Comandos: /save, /zonas, /nome NOME, /stats, /cheats (ativa /goto ZONA e /give ITEM N)', '#cfe'); break;
-      case '/save': case '/salvar': this.save(true); break;
-      case '/zonas': this.notify('Zonas: ' + Object.entries(ZONES).map(([k, z]) => `${z.name} (${k})`).join(', '), '#cfe'); break;
-      case '/nome': if (args.length) { this.player.name = args.join(' ').slice(0, 16); this.ship.name = `Nave de ${this.player.name}`; this.notify('Nome alterado.', '#cfe'); } break;
-      case '/stats': this.notify(`Bots destruídos: ${this.stats.bots} | Naves destruídas: ${this.stats.ships} | Tempo: ${Math.floor(this.stats.time / 60)} min`, '#cfe'); break;
-      case '/cheats': this.cheats = !this.cheats; this.notify(`Trapaças ${this.cheats ? 'ativadas' : 'desativadas'}.`, '#ffd84a'); break;
-      case '/goto':
-        if (!this.cheats) { this.notify('Ative /cheats primeiro.', '#ffb070'); break; }
-        if (ZONES[args[0]]) this.travel(args[0]); else this.notify('Zona desconhecida. Veja /zonas', '#ffb070');
-        break;
-      case '/give':
-        if (!this.cheats) { this.notify('Ative /cheats primeiro.', '#ffb070'); break; }
-        if (ITEMS[args[0]]) { this.giveItem(args[0], parseInt(args[1] || '1', 10) || 1); }
-        else this.notify('Item desconhecido. Ex.: /give metal 16. Itens: ' + Object.keys(ITEMS).join(', '), '#ffb070');
-        break;
-      default: this.notify('Comando desconhecido. Digite /help', '#ffb070');
-    }
-  }
 }
+
