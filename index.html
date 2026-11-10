@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Couraçado — aeronaves no espaço profundo</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<!-- Tela de título -->
+<div id="title">
+  <div class="title-box">
+    <h1>COURAÇADO</h1>
+    <p class="sub">Construa sua aeronave bloco a bloco, tripule, pilote e lute no espaço profundo.</p>
+    <input id="name-input" maxlength="16" placeholder="Seu nome" autocomplete="off">
+    <div class="btns">
+      <button id="btn-play">Nova nave</button>
+      <button id="btn-continue" class="hidden">Continuar (salvo)</button>
+    </div>
+    <div class="quick">
+      <div><kbd>WASD</kbd> andar / pilotar</div>
+      <div><kbd>Espaço</kbd> pular (segure para mais alto)</div>
+      <div><kbd>Clique</kbd> usar item / interagir</div>
+      <div><kbd>1-0</kbd> trocar item • <kbd>Q</kbd> soltar</div>
+      <div><kbd>H</kbd> ajuda completa</div>
+    </div>
+  </div>
+</div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="hud-tl">
+    <div id="hud-zone"></div>
+    <div class="bars">
+      <div class="barbox"><div id="bar-shield" class="fill shield"></div><span id="txt-shield"></span></div>
+      <div class="barbox"><div id="bar-hull" class="fill hull"></div><span id="txt-hull"></span></div>
+    </div>
+    <div id="hud-info"></div>
+  </div>
+  <div id="hud-tr">
+    <canvas id="minimap" width="200" height="200" title="Clique (ou M) para ampliar"></canvas>
+    <div class="tbtns">
+      <button id="btn-equip" title="Equipamento (I)">🎒</button>
+      <button id="btn-sound" title="Som">🔊</button>
+      <button id="btn-help" title="Ajuda (H)">?</button>
+    </div>
+  </div>
+  <div id="zone-banner"></div>
+  <div id="bottom">
+    <div id="hint"></div>
+    <div id="held-name"></div>
+    <div id="hotbar"></div>
+  </div>
+  <div id="chat">
+    <div id="chat-log"></div>
+    <input id="chat-input" class="hidden" maxlength="120" autocomplete="off" placeholder="Mensagem ou /comando (Enter envia)">
+  </div>
+</div>
+
+<!-- Fabricador -->
+<div id="panel-fab" class="panel hidden">
+  <div class="phead"><span id="fab-title">Fabricador</span><button class="close">✕</button></div>
+  <div id="fab-mats"></div>
+  <div id="fab-recipes"></div>
+  <div class="ptitle">Fila de produção</div>
+  <div id="fab-queue"></div>
+  <div class="prow"><button id="fab-clear">Limpar fila</button><button id="fab-eject">Ejetar materiais</button></div>
+  <small class="muted">Clique: +1 • Shift+clique: +5 • Ctrl+clique ou botão direito: repetir sempre</small>
+</div>
+
+<!-- Caixa expansível -->
+<div id="panel-storage" class="panel hidden">
+  <div class="phead"><span>Caixa Expansível</span><button class="close">✕</button></div>
+  <div id="storage-grid"></div>
+  <small class="muted">Arraste itens entre a caixa e seu inventário. Shift ao arrastar divide a pilha.</small>
+</div>
+
+<!-- Equipamento -->
+<div id="panel-equip" class="panel hidden">
+  <div class="phead"><span>Equipamento</span><button class="close">✕</button></div>
+  <div id="equip-slots">
+    <div class="eq"><div class="slot" data-idx="feet"></div><span>Pés</span></div>
+    <div class="eq"><div class="slot" data-idx="back"></div><span>Costas</span></div>
+  </div>
+  <small class="muted">Duplo clique num item do inventário para equipar. Clique no slot para desequipar.</small>
+</div>
+
+<!-- Ajuda -->
+<div id="help" class="hidden">
+  <div class="help-box">
+    <div class="phead"><span>Como jogar</span><button id="help-close">✕</button></div>
+    <div class="cols">
+      <div>
+        <h3>Tripulante</h3>
+        <p><kbd>A</kbd>/<kbd>D</kbd> andar • <kbd>Espaço</kbd> pular (segure para pular mais alto)</p>
+        <p><kbd>W</kbd>/<kbd>S</kbd> subir/descer escadas • <kbd>S</kbd> desce de passarelas • <kbd>Espaço</kbd> sai da escada</p>
+        <p><kbd>1</kbd>–<kbd>0</kbd> ou clique: trocar slot • arraste para mover • <kbd>Shift</kbd>+arrastar divide</p>
+        <p><kbd>Q</kbd> soltar/arremessar a pilha (<kbd>Shift</kbd>+<kbd>Q</kbd>: só um) • arraste para fora do inventário</p>
+        <p><kbd>Clique</kbd> usa o item na mão / interage • <kbd>Botão direito</kbd> cancela • <kbd>R</kbd> ação secundária</p>
+        <p><kbd>I</kbd> equipamento • <kbd>M</kbd> mapa • <kbd>Enter</kbd> chat • <kbd>Roda</kbd> zoom</p>
+        <h3>Leme</h3>
+        <p>Clique no leme para pilotar. <kbd>WASD</kbd> move a nave, <kbd>clique</kbd> dispara as torretas RC (laranja), <kbd>Q</kbd> usa um portal, <kbd>Espaço</kbd>/<kbd>Esc</kbd> sai.</p>
+        <h3>Torretas</h3>
+        <p>Torretas cinzas são manuais: clique nelas para controlar, mire com o mouse e clique para atirar. <kbd>Q</kbd> descarrega. Carregue usando caixas de munição nelas (<kbd>Shift</kbd> carrega a pilha toda). Torretas vão no casco externo e ocupam 3 blocos.</p>
+      </div>
+      <div>
+        <h3>Construção</h3>
+        <p>Blocos, passarelas, escadas e redes são colocados clicando dentro da nave. Objetos (leme, fabricadores, escotilhas...) precisam de piso embaixo. A <b>Chave Inglesa</b> desmonta (segure o clique).</p>
+        <p><b>Ampliador</b>/<b>Encolhedor</b> mudam o tamanho da nave (máx. 80×80). <kbd>R</kbd> troca o eixo.</p>
+        <h3>Recursos e fabricação</h3>
+        <p>Atire em <b style="color:#e04040">bots vermelhos</b> (metal e explosivos), <b style="color:#3f7fe0">azuis</b> (torretas) e <b style="color:#3fc060">verdes</b> (bolas). Rochas têm 25% de chance de soltar metal; rochas com <b>diamante branco</b> sempre dão itens raros; cristais <b style="color:#b45cff">roxos</b> dão fluxo.</p>
+        <p>O saque vira caixas flutuantes: encoste a nave nelas e os itens saem pela <b>Escotilha de Carga</b>. Carregue materiais nos fabricadores clicando neles com o material na mão.</p>
+        <h3>Escudo e destruição</h3>
+        <p>Com escudo zerado, as balas danificam o interior e o casco. Casco zerado = nave destruída (e o jogo salvo é perdido!). Use <b>Reforços de Escudo</b>, <b>Kits de Reparo</b> e <b>Geradores de Escudo</b>.</p>
+        <h3>Zonas</h3>
+        <p>O <b>Porto Livre</b> é seguro e é onde o jogo é salvo. Voe sobre um portal e aperte <kbd>Q</kbd> no leme para viajar. Pardal, Falcão e as zonas de missão têm naves piratas.</p>
+        <p class="muted">Comandos: /help, /save, /zonas, /nome, /stats, /cheats</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Morte -->
+<div id="death" class="hidden">
+  <div class="title-box">
+    <h1 style="color:#ff6a4a">NAVE DESTRUÍDA</h1>
+    <p id="death-stats"></p>
+    <button id="death-btn">Nova nave</button>
+  </div>
+</div>
+
+<div id="tooltip" class="hidden"></div>
+<div id="drag-ghost" class="hidden"></div>
+
+<script src="js/util.js"></script>
+<script src="js/data.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/ship.js"></script>
+<script src="js/player.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/world.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/render.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/game.js"></script>
+<script>window.game = new Game();</script>
+</body>
+</html>
