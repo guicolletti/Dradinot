@@ -130,7 +130,7 @@ class Player {
     }
 
     if (this.onLadder) {
-      const climb = 120 * speedMul;
+      const climb = 90 * speedMul;
       this.vx = (input.right - input.left) * run * 0.7;
       this.vy = (input.down - input.up) * climb;
       if (input.jumpPressed) { this.onLadder = false; this.vy = -220 * jumpMul; this.jumpT = 0.1; }

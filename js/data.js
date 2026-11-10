@@ -256,9 +256,9 @@ const ZONES = {
 
 // ---------- Bots ----------
 const BOTS = {
-  red:   { name: 'Bot Vermelho', r: 18, hp: 40, speed: 120, color: '#e04040', core: '#ff9a9a', ammo: 'bot_red', rof: 1.1, range: 900, drops: 'red' },
-  blue:  { name: 'Bot Azul', r: 24, hp: 110, speed: 95, color: '#3f7fe0', core: '#a0c8ff', ammo: 'bot_blue', rof: 0.6, burst: 3, range: 1000, drops: 'blue' },
-  green: { name: 'Bot Verde', r: 20, hp: 70, speed: 150, color: '#3fc060', core: '#b0ffc0', ammo: 'bot_green', rof: 1.2, range: 650, drops: 'green' },
+  red:   { name: 'Bot Vermelho', r: 60, hp: 40, speed: 120, color: '#e04040', core: '#ff9a9a', ammo: 'bot_red', rof: 1.1, range: 900, drops: 'red' },
+  blue:  { name: 'Bot Azul', r: 85, hp: 110, speed: 95, color: '#3f7fe0', core: '#a0c8ff', ammo: 'bot_blue', rof: 0.6, burst: 3, range: 1000, drops: 'blue' },
+  green: { name: 'Bot Verde', r: 35, hp: 70, speed: 150, color: '#3fc060', core: '#b0ffc0', ammo: 'bot_green', rof: 1.2, range: 650, drops: 'green' },
 };
 
 const LOOT_TABLES = {
