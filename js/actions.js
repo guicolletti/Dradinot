@@ -127,17 +127,20 @@ class Session {
       for (const t of s.turrets) {
         if (!TURRETS[t.type].rc) continue;
         const tw = s.turretWorld(t);
-        const a = s.clampTurretAngle(t, Math.atan2(this.mouse.y - tw.y, this.mouse.x - tw.x));
+        const raw = Math.atan2(this.mouse.y - tw.y, this.mouse.x - tw.x);
+        const a = s.clampTurretAngle(t, raw);
         t.angle += clamp(angDiff(t.angle, a), -8 * dt, 8 * dt);
-        if (this.mouse.left) w.fireTurret(s, t, false, () => this.sfxMe('click'));
+        // só dispara se o mouse estiver no lado da torreta (dentro do alcance de mira)
+        if (this.mouse.left && s.turretCanAim(t, raw)) w.fireTurret(s, t, false, () => this.sfxMe('click'));
       }
     } else if (p.mode === 'turret') {
       const t = p.ctrl;
       if (!s.turrets.includes(t) || t.user !== this) { this.exitControl(); return; }
       const tw = s.turretWorld(t);
-      const a = s.clampTurretAngle(t, Math.atan2(this.mouse.y - tw.y, this.mouse.x - tw.x));
+      const raw = Math.atan2(this.mouse.y - tw.y, this.mouse.x - tw.x);
+      const a = s.clampTurretAngle(t, raw);
       t.angle += clamp(angDiff(t.angle, a), -10 * dt, 10 * dt);
-      if (this.mouse.left) w.fireTurret(s, t, false, () => this.sfxMe('click'));
+      if (this.mouse.left && s.turretCanAim(t, raw)) w.fireTurret(s, t, false, () => this.sfxMe('click'));
     }
     // fecha painéis distantes
     if (this.ui) {

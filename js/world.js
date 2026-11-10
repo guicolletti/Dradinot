@@ -444,6 +444,7 @@ class World {
       it.x = clamp(it.x, TS, s.pw - TS - it.w);
       it.y = clamp(it.y, TS, s.ph - TS - it.h);
     }
+    this.separateItems(s);
     for (const o of s.objects) {
       const od = OBJECTS[o.type];
       if (od.fab) this.updateFab(s, o, dt);
@@ -456,6 +457,56 @@ class World {
           if (n - k > 0) s.cargoQueue[0] = [item, n - k]; else s.cargoQueue.shift();
           o.cool = 0.3;
           this.sound('pop', s.cx, s.cy);
+        }
+      }
+    }
+  }
+
+  // colisão entre itens soltos: eles se empilham em vez de se sobrepor
+  separateItems(s) {
+    const L = s.items;
+    if (L.length < 2) return;
+    // grade espacial simples por célula da nave
+    const grid = new Map();
+    for (let i = 0; i < L.length; i++) {
+      const k = Math.floor((L[i].x + 5) / TS) + Math.floor((L[i].y + 5) / TS) * 1000;
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push(i);
+    }
+    const free = (it, x, y) => {
+      const x0 = Math.floor(x / TS), x1 = Math.floor((x + it.w - 0.01) / TS);
+      const y0 = Math.floor(y / TS), y1 = Math.floor((y + it.h - 0.01) / TS);
+      for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) if (s.solidForItem(cx, cy)) return false;
+      return true;
+    };
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < L.length; i++) {
+        const a = L[i];
+        const gx = Math.floor((a.x + 5) / TS), gy = Math.floor((a.y + 5) / TS);
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const cell = grid.get(gx + dx + (gy + dy) * 1000);
+          if (!cell) continue;
+          for (const j of cell) {
+            if (j <= i) continue;
+            const b = L[j];
+            const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+            const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+            if (ox <= 0.01 || oy <= 0.01) continue;
+            if (oy < ox) {
+              // empilha: o de cima fica apoiado no de baixo
+              const top = a.y < b.y ? a : b, bot = top === a ? b : a;
+              const ny = bot.y - top.h;
+              if (free(top, top.x, ny)) { top.y = ny; if (top.vy > 0) top.vy = 0; top.onGround = true; top.vx *= 0.9; }
+              else if (free(bot, bot.x, top.y + top.h)) bot.y = top.y + top.h;
+            } else {
+              const left = a.x < b.x ? a : b, right = left === a ? b : a;
+              const half = ox / 2;
+              if (free(left, left.x - half, left.y)) left.x -= half; else if (free(right, right.x + half, right.y)) right.x += half;
+              if (free(right, right.x + half, right.y)) right.x += half; else if (free(left, left.x - half, left.y)) left.x -= half;
+              const v = (left.vx + right.vx) / 2;
+              left.vx = Math.min(left.vx, v); right.vx = Math.max(right.vx, v);
+            }
+          }
         }
       }
     }

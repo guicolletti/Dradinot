@@ -219,6 +219,10 @@ class Ship {
     return { x: this.x + l.x, y: this.y + l.y };
   }
   // limita a mira ao semiplano externo do lado
+  // o ângulo está dentro do alcance de mira da torreta?
+  turretCanAim(t, a) {
+    return Math.abs(angDiff(SIDE_ANGLE[t.side], a)) <= Math.PI / 2 - 0.05;
+  }
   clampTurretAngle(t, a) {
     const base = SIDE_ANGLE[t.side];
     const d = clamp(angDiff(base, a), -Math.PI / 2 + 0.05, Math.PI / 2 - 0.05);
