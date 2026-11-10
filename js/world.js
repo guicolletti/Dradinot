@@ -453,7 +453,8 @@ class World {
         if (o.cool <= 0 && s.cargoQueue.length && o.mode !== 'none' && !this.hatchBlocked(s, o)) {
           const [item, n] = s.cargoQueue[0];
           const k = Math.min(n, ITEMS[item].stack);
-          s.spawnItem(item, k, (o.x + 1) * TS + rand(-6, 6), (o.y + 0.6) * TS, rand(-60, 60), -rand(120, 220));
+          const hd = OBJECTS.hatch;
+          s.spawnItem(item, k, (o.x + hd.w / 2) * TS + rand(-3, 3), (o.y + hd.h * 0.4) * TS, rand(-60, 60), -rand(80, 160));
           if (n - k > 0) s.cargoQueue[0] = [item, n - k]; else s.cargoQueue.shift();
           o.cool = 0.3;
           this.sound('pop', s.cx, s.cy);
@@ -479,6 +480,7 @@ class World {
       for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) if (s.solidForItem(cx, cy)) return false;
       return true;
     };
+    for (const it of L) it._touch = false;
     for (let pass = 0; pass < 2; pass++) {
       for (let i = 0; i < L.length; i++) {
         const a = L[i];
@@ -492,32 +494,42 @@ class World {
             const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
             const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
             if (ox <= 0.01 || oy <= 0.01) continue;
-            if (oy < ox) {
+            const stack = () => {
               // empilha: o de cima fica apoiado no de baixo
-              const top = a.y < b.y ? a : b, bot = top === a ? b : a;
+              const top = a.y < b.y || (a.y === b.y && a.id > b.id) ? a : b, bot = top === a ? b : a;
               const ny = bot.y - top.h;
-              if (free(top, top.x, ny)) { top.y = ny; if (top.vy > 0) top.vy = 0; top.onGround = true; top.vx *= 0.9; }
-              else if (free(bot, bot.x, top.y + top.h)) bot.y = top.y + top.h;
-            } else {
-              const left = a.x < b.x ? a : b, right = left === a ? b : a;
+              if (free(top, top.x, ny)) { top.y = ny; if (top.vy > 0) top.vy = 0; top.onGround = true; top.vx *= 0.9; return true; }
+              if (free(bot, bot.x, top.y + top.h)) { bot.y = top.y + top.h; return true; }
+              return false;
+            };
+            const side = () => {
+              const left = a.x < b.x || (a.x === b.x && a.id < b.id) ? a : b, right = left === a ? b : a;
               const half = ox / 2;
-              if (free(left, left.x - half, left.y)) left.x -= half; else if (free(right, right.x + half, right.y)) right.x += half;
-              if (free(right, right.x + half, right.y)) right.x += half; else if (free(left, left.x - half, left.y)) left.x -= half;
-              const v = (left.vx + right.vx) / 2;
-              left.vx = Math.min(left.vx, v); right.vx = Math.max(right.vx, v);
-            }
+              let moved = 0;
+              if (free(left, left.x - half, left.y)) { left.x -= half; moved += half; }
+              if (free(right, right.x + (ox - moved), right.y)) { right.x += ox - moved; moved = ox; }
+              else if (moved < ox && free(left, left.x - (ox - moved), left.y)) { left.x -= ox - moved; moved = ox; }
+              if (moved > 0) { const v = (left.vx + right.vx) / 2; left.vx = Math.min(left.vx, v); right.vx = Math.max(right.vx, v); }
+              return moved >= ox - 0.01;
+            };
+            a._touch = b._touch = true;
+            // se ficaram espremidos lado a lado por muito tempo, empilham
+            if (oy < ox || a.ov > 20 || b.ov > 20) { if (!stack()) side(); }
+            else if (!side()) stack();
           }
         }
       }
     }
+    for (const it of L) it.ov = it._touch ? (it.ov || 0) + 1 : 0;
   }
 
   hatchBlocked(s, o) {
     if (o.mode === 'none') return true;
     let c = 0;
+    const od = OBJECTS[o.type];
     const x0 = o.x * TS, y0 = o.y * TS;
-    for (const it of s.items) if (aabbOverlap(it.x, it.y, it.w, it.h, x0, y0, 2 * TS, 2 * TS)) c++;
-    return c >= 6;
+    for (const it of s.items) if (aabbOverlap(it.x, it.y, it.w, it.h, x0, y0, od.w * TS, od.h * TS)) c++;
+    return c >= 3 * od.w * od.h;
   }
 
   updateFab(s, o, dt) {
