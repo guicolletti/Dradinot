@@ -396,18 +396,28 @@ class Ship {
 
 // ---------- nave inicial ----------
 function buildStarterShip() {
-  const s = new Ship(24, 14, { name: 'Minha Nave' });
+  const s = new Ship(11, 8, { name: 'Minha Nave' });
+
   // convés do meio (passarela) com abertura para escada
-  for (let x = 1; x <= 22; x++) s.set(x, 7, T.WALKWAY);
-  for (let y = 7; y <= 12; y++) s.set(11, y, T.LADDER);
-  s.placeObject('helm', 19, 11);
-  const fab = s.placeObject('fab_starter', 3, 11);
+  for (let x = 1; x <= 3; x++) s.set(x, 4, T.WALKWAY);
+  for (let x = 5; x <= 9; x++) s.set(x, 3, T.BLOCK);
+  for (let y = 3; y <= 6; y++) s.set(4, y, T.LADDER);
+
+  for (let y = 5; y <= 6; y++) s.set(3, y, T.NET);
+
+  s.placeObject('helm', 6, 5);
+
+  s.placeObject('expando', 8, 1);
+
+  const fab = s.placeObject('fab_starter', 2, 2);
   fab.mats = { metal: 40, explosives: 20, flux: 0 };
-  s.placeObject('hatch', 7, 11);
-  s.placeObject('spawn', 3, 5);
+
+  s.placeObject('hatch', 1, 1);
+  s.placeObject('ejector', 5, 4);
+
+  s.placeObject('spawn', 8, 5);
   s.placeTurret('turret_rc', 'right', 4, { ammoType: 'standard', ammo: 15 });
-  s.placeTurret('turret', 'top', 7, { ammoType: 'standard', ammo: 15 });
-  s.placeTurret('turret', 'bottom', 15, { ammoType: 'standard', ammo: 15 });
+  s.placeTurret('turret_rc', 'left', 4, { ammoType: 'standard', ammo: 15 });
   s.recalc();
   s.shield = s.maxShield;
   s.integrity = s.maxIntegrity;
