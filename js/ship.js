@@ -521,7 +521,7 @@ function resizeTarget(s, axis, dir, lx, ly) {
 // ---------- Nave de testes (TEMPORÁRIO) ----------
 // Com true, toda nave nova é criada com a nave de testes abaixo, que tem um pouco de tudo.
 // Para voltar à nave padrão, troque para false.
-const USE_TEST_SHIP = true;
+const USE_TEST_SHIP = false;
 
 function buildTestShip() {
   const s = new Ship(26, 12, { name: 'Nave de Testes' });
@@ -618,7 +618,7 @@ function buildStarterShip() {
 
   s.placeObject('helm', 6, 5);
 
-  s.placeObject('expando', 8, 1);
+  s.placeObject('expando', 8, 1, { store: { item: 'ammo_standard', n: 48 } });
 
   const fab = s.placeObject('fab_starter', 2, 2);
   fab.mats = { metal: 40, explosives: 20, flux: 0 };
