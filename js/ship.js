@@ -532,7 +532,7 @@ function resizeTarget(s, axis, dir, lx, ly) {
 // ---------- Nave de testes (TEMPORÁRIO) ----------
 // Com true, toda nave nova é criada com a nave de testes abaixo, que tem um pouco de tudo.
 // Para voltar à nave padrão, troque para false.
-const USE_TEST_SHIP = true;
+const USE_TEST_SHIP = false;
 
 function buildTestShip() {
   const s = new Ship(26, 12, { name: 'Nave de Testes' });
