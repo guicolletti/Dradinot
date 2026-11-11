@@ -152,6 +152,7 @@ class Ship {
     this.mass = 40 + blocks * 0.25 + this.objects.length * 2 + this.turrets.length * 3;
     this.accel = clamp(36000 / this.mass, 140, 900);
     this.maxSpeed = clamp(520 - this.mass * 0.6, 240, 520);
+    if (this.team === 'derelict') { this.maxShield = 0; this.mass *= 3; }   // abandonada: sem escudo e pesada
     if (this.shield > this.maxShield) this.shield = this.maxShield;
     if (this.integrity > this.maxIntegrity) this.integrity = this.maxIntegrity;
   }
@@ -174,7 +175,17 @@ class Ship {
     if (d.floor) {
       for (let xx = 0; xx < d.w; xx++) if (!this.supportAt(cx + xx, cy + d.h)) return false;
     }
+    // escotilha de tripulação: encostada na parede esquerda ou direita (é por ali que se sai)
+    if (type === 'airlock' && cx !== 1 && cx !== this.w - 2) return false;
     return true;
+  }
+
+  // ---------- escotilha de tripulação ----------
+  // lado por onde se sai (-1 esquerda, 1 direita) e ponto da porta do lado de fora (mundo)
+  airlockSide(o) { return o.x <= 1 && !(this.w <= 3) ? -1 : o.x >= this.w - 2 ? 1 : (o.x < this.w / 2 ? -1 : 1); }
+  airlockDoor(o) {
+    const side = this.airlockSide(o);
+    return { x: side < 0 ? this.x : this.x + this.pw, y: this.y + (o.y + 1) * TS + 3, side };
   }
 
   placeObject(type, cx, cy, extra = {}) {
@@ -521,7 +532,7 @@ function resizeTarget(s, axis, dir, lx, ly) {
 // ---------- Nave de testes (TEMPORÁRIO) ----------
 // Com true, toda nave nova é criada com a nave de testes abaixo, que tem um pouco de tudo.
 // Para voltar à nave padrão, troque para false.
-const USE_TEST_SHIP = false;
+const USE_TEST_SHIP = true;
 
 function buildTestShip() {
   const s = new Ship(26, 12, { name: 'Nave de Testes' });
@@ -565,6 +576,7 @@ function buildTestShip() {
   put('hatch', 24, 5);
   // Carregador de exemplo: pega o que chega pela escotilha (diagonal) e solta à esquerda
   put('loader', 23, 4, { din: 3, dout: 6 });
+  put('airlock', 24, 7);   // escotilha de tripulação (sai pela direita)
 
   // ===== torretas: os 4 tipos, as 8 munições, quantidades variadas (uma vazia) =====
   const tur = (type, side, pos, ammoType, ammo) => {
@@ -583,12 +595,12 @@ function buildTestShip() {
   tur('turret_rc', 'left', 3, 'standard', 10);
   tur('turret', 'left', 8, 'sniper', 12);
   tur('turret_rc', 'right', 3, 'standard', 24);
-  tur('turret_burst', 'right', 8, 'flak', 30);
+  tur('turret_mining', 'right', 8, null, 0);   // mineradora: quebra blocos do mapa
 
   // ===== itens soltos =====
   const drop = (item, n, cx, cy) => s.spawnItem(item, n, (cx + 0.5) * TS, (cy + 0.5) * TS, 0, 0);
   // atrás da rede (andar de cima): uma unidade de cada ferramenta e equipamento
-  [['wrench', 1], ['shredder', 1], ['booster', 16], ['repair', 8], ['embiggener', 4], ['shrinker', 4], ['boots', 1], ['speed', 1], ['jetpack', 1]]
+  [['wrench', 1], ['shredder', 1], ['booster', 16], ['repair', 8], ['embiggener', 4], ['shrinker', 4], ['boots', 1], ['speed', 1], ['jetpack', 1], ['drill', 1], ['laser_gun', 1]]
     .forEach(([it, n], i) => drop(it, n, 18 + (i % 5), i < 5 ? 5 : 4));
   // bolas, no andar de cima
   drop('loader', 8, 23, 2);   // Carregadores para testar (caem em cima do Carregador de exemplo)
@@ -627,10 +639,85 @@ function buildStarterShip() {
   s.placeObject('ejector', 5, 4);
 
   s.placeObject('spawn', 8, 5);
+  s.placeObject('airlock', 9, 5);   // porta para sair ao espaço
   s.placeTurret('turret_rc', 'right', 4, { ammoType: 'standard', ammo: 15 });
   s.placeTurret('turret_rc', 'left', 4, { ammoType: 'standard', ammo: 15 });
   s.recalc();
   s.shield = s.maxShield;
   s.integrity = s.maxIntegrity;
+  return s;
+}
+
+// ---------- naves abandonadas ----------
+// Sem tripulação e sem motor: ficam paradas com saque dentro (caixas e itens soltos)
+// e drones de vigia. Entra-se pelas escotilhas de tripulação.
+function buildDerelict(size = choice(['small', 'small', 'medium'])) {
+  const [w, h] = size === 'small' ? [randInt(14, 18), randInt(9, 10)] : [randInt(20, 26), randInt(13, 15)];
+  const s = new Ship(w, h, { name: choice(DERELICT_NAMES), team: 'derelict', color: choice(['#4d5560', '#55504a', '#48505a', '#5a4e52']) });
+  // conveses a cada 5 linhas, cada um com uma escada até o de baixo
+  const decks = [];
+  for (let y = h - 6; y > 2; y -= 5) decks.push(y);
+  for (const y of decks) {
+    for (let x = 1; x < w - 1; x++) s.set(x, y, Math.random() < 0.3 ? T.BLOCK : T.WALKWAY);
+    const lx = randInt(3, w - 4);
+    s.set(lx, y, T.LADDER);
+    for (let yy = y + 1; yy < h - 1 && s.get(lx, yy) === T.EMPTY; yy++) s.set(lx, yy, T.LADDER);
+  }
+  // entulho: blocos soltos e redes (sem tapar as escotilhas)
+  for (let i = 0; i < w * h * 0.03; i++) {
+    const x = randInt(3, w - 4), y = randInt(1, h - 2);
+    if (s.get(x, y) === T.EMPTY && s.get(x, y - 1) !== T.LADDER && s.get(x, y + 1) !== T.LADDER) s.set(x, y, Math.random() < 0.7 ? T.BLOCK : T.NET);
+  }
+  // escotilhas: uma de cada lado, no piso de baixo (e às vezes num convés)
+  const floors = [h - 1].concat(decks);
+  const tryAirlock = (x) => {
+    for (const fy of floors) {
+      if (s.canPlaceObject('airlock', x, fy - 2)) { s.placeObject('airlock', x, fy - 2); return true; }
+    }
+    return false;
+  };
+  tryAirlock(1); tryAirlock(w - 2);
+  if (!s.objectsOf('airlock').length) { s.set(1, h - 2, T.EMPTY); s.set(1, h - 3, T.EMPTY); s.placeObject('airlock', 1, h - 3); }
+  // caixas com saque
+  const loot = () => choice([
+    ['metal', randInt(24, 80)], ['metal', randInt(24, 80)], ['explosives', randInt(16, 48)], ['flux', randInt(3, 10)],
+    ['ammo_standard', randInt(16, 48)], ['ammo_scatter', randInt(16, 32)], ['ammo_flak', randInt(8, 24)], ['block', randInt(16, 48)],
+  ]);
+  const nBox = size === 'small' ? randInt(1, 2) : randInt(2, 4);
+  for (let k = 0, tries = 0; k < nBox && tries < 80; tries++) {
+    const x = randInt(2, w - 4), fy = choice(floors);
+    if (!s.canPlaceObject('expando', x, fy - 2)) continue;
+    const [item, n] = loot();
+    s.placeObject('expando', x, fy - 2, { store: { item, n: Math.min(n, expandoCap(item)) } });
+    k++;
+  }
+  // itens soltos pelo chão
+  const extras = ['metal', 'metal', 'explosives', 'ammo_standard', 'flux', 'repair', 'booster', 'wrench', 'drill', 'embiggener', 'laser_gun'];
+  for (let k = 0, n = randInt(3, size === 'small' ? 5 : 8); k < n; k++) {
+    const it = choice(extras), st = ITEMS[it].stack;
+    const fy = choice(floors), x = randInt(2, w - 3);
+    if (s.solidAt(x, fy - 1)) continue;
+    s.spawnItem(it, st === 1 ? 1 : randInt(Math.ceil(st / 4), st), (x + 0.5) * TS, (fy - 1) * TS + 2, 0, 0);
+  }
+  // raro: um equipamento ou torreta guardados
+  if (Math.random() < 0.3) {
+    const fy = choice(floors), x = randInt(2, w - 3);
+    if (!s.solidAt(x, fy - 1)) s.spawnItem(choice(['jetpack', 'boots', 'speed', 'turret_auto', 'turret_burst', 'shield_gen']), 1, (x + 0.5) * TS, (fy - 1) * TS + 2, 0, 0);
+  }
+  // casco gasto
+  for (let i = 0; i < s.tiles.length; i++) { const t = s.tiles[i]; if (t && t !== T.HULL && Math.random() < 0.4) s.tileHp[i] = TILE_INFO[t].hp * rand(0.35, 0.9); }
+  s.recalc();
+  s.shield = 0;
+  s.integrity = s.maxIntegrity;
+  // drones de vigia
+  s.drones = [];
+  const nDr = size === 'small' ? randInt(1, 2) : randInt(2, 4);
+  for (let k = 0, tries = 0; k < nDr && tries < 60; tries++) {
+    const x = randInt(2, w - 3) * TS + 3, y = randInt(1, h - 2) * TS + 3;
+    if (s.boxHits(x, y, 10, 10, true)) continue;
+    s.drones.push({ id: uid(), x, y, vx: 0, vy: 0, hp: DRONE.hp, cool: 0, flash: 0, wander: rand(0, 6) });
+    k++;
+  }
+  s.looted = false;
   return s;
 }

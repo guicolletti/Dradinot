@@ -109,6 +109,19 @@ function collideMove(e, ship, dt, forItem, dropping, boxes) {
   return { hitX, hitY };
 }
 
+// corda: puxa o personagem de volta para dentro do comprimento
+function tetherPull(p, a, world) {
+  const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+  const dx = cx - a.x, dy = cy - a.y, d = Math.hypot(dx, dy);
+  if (d <= EVA.tether) return;
+  const nx = dx / d, ny = dy / d;
+  const ox = p.x, oy = p.y;
+  p.x = a.x + nx * EVA.tether - p.w / 2; p.y = a.y + ny * EVA.tether - p.h / 2;
+  if (world && world.rectHitsTerrain(p.x, p.y, p.w, p.h)) { p.x = ox; p.y = oy; }
+  const out = p.vx * nx + p.vy * ny;
+  if (out > 0) { p.vx -= out * nx; p.vy -= out * ny; }
+}
+
 // ---------- inventário ----------
 function invAdd(inv, item, n) {
   const max = ITEMS[item].stack;
@@ -151,6 +164,12 @@ class Player {
     this.mode = 'walk';       // walk | helm | turret
     this.ctrl = null;         // objeto/torreta controlado
     this.jetFuel = 1;
+    // fora da nave: this.ship = null e x/y passam a ser coordenadas do mundo.
+    // Dentro de uma nave abandonada: this.ship = a nave abandonada.
+    this.hp = EVA.hp;
+    this.o2 = 1;              // fração do oxigênio
+    this.fuel = 1;            // fração do combustível do jato
+    this.tether = null;       // { sid, oid }: corda presa a uma escotilha de tripulação
     this.walkAnim = 0;
     this.name = 'Você';
     this.color = '#f0c27a';
@@ -176,6 +195,51 @@ class Player {
   }
 
   get held() { return this.inv[this.sel]; }
+  get inSpace() { return !this.ship; }
+  // posição no mundo (dentro de uma nave, soma a posição da nave)
+  get wx() { return this.ship ? this.ship.x + this.x : this.x; }
+  get wy() { return this.ship ? this.ship.y + this.y : this.y; }
+
+  // ---------- no espaço: jato com inércia ----------
+  // world: terreno; ships: naves (cascos são sólidos por fora); anchor: ponto da corda ou null
+  updateSpace(dt, input, world, ships, anchor) {
+    if (this.mode !== 'walk') { this.jetting = false; return; }
+    let ax = input.right - input.left, ay = input.down - input.up;
+    const l = Math.hypot(ax, ay);
+    if (l > 1) { ax /= l; ay /= l; }
+    const thrust = l > 0 && (anchor || this.fuel > 0);
+    this.jetting = thrust;
+    this.jetDir = thrust ? Math.atan2(ay, ax) : this.jetDir;
+    if (thrust) {
+      this.vx += ax * EVA.accel * dt; this.vy += ay * EVA.accel * dt;
+      if (!anchor) this.fuel = Math.max(0, this.fuel - dt / EVA.fuel);
+    }
+    // quase sem atrito: continua deslizando
+    const damp = Math.pow(0.8, dt);
+    this.vx *= damp; this.vy *= damp;
+    const sp = Math.hypot(this.vx, this.vy);
+    if (sp > EVA.max) { this.vx *= EVA.max / sp; this.vy *= EVA.max / sp; }
+    if (ax) this.facing = sign(ax);
+    this.onGround = false; this.onLadder = false;
+    // terreno: bate e quica de leve
+    this.x += this.vx * dt;
+    if (world.rectHitsTerrain(this.x, this.y, this.w, this.h)) { this.x -= this.vx * dt; this.vx *= -0.3; }
+    this.y += this.vy * dt;
+    if (world.rectHitsTerrain(this.x, this.y, this.w, this.h)) { this.y -= this.vy * dt; this.vy *= -0.3; }
+    // cascos das naves: empurra para fora pelo lado mais perto e acompanha a nave
+    for (const s of ships) {
+      if (!aabbOverlap(this.x, this.y, this.w, this.h, s.x, s.y, s.pw, s.ph)) continue;
+      const pl = this.x + this.w - s.x, pr = s.x + s.pw - this.x, pt = this.y + this.h - s.y, pb = s.y + s.ph - this.y;
+      const m = Math.min(pl, pr, pt, pb);
+      if (m === pl) { this.x = s.x - this.w; this.vx = Math.min(this.vx, s.vx || 0); }
+      else if (m === pr) { this.x = s.x + s.pw; this.vx = Math.max(this.vx, s.vx || 0); }
+      else if (m === pt) { this.y = s.y - this.h; this.vy = Math.min(this.vy, s.vy || 0); }
+      else { this.y = s.y + s.ph; this.vy = Math.max(this.vy, s.vy || 0); }
+    }
+    // corda: não deixa passar do comprimento (tira a velocidade para fora)
+    if (anchor) tetherPull(this, anchor, world);
+    this.walkAnim += dt * 2;
+  }
   get cxL() { return this.x + this.w / 2; }
   get cyL() { return this.y + this.h / 2; }
 

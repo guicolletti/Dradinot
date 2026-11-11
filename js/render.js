@@ -130,8 +130,10 @@ class Renderer {
     this.drawTerrain(ctx, w, view);
     for (const c of w.crates) this.drawCrate(ctx, c);
     for (const s of w.ships) if (this.inView(s.x, s.y, s.pw, s.ph, 60)) this.drawShip(ctx, s);
+    this.drawSpacewalkers(ctx, g, w);
     for (const b of w.bots) if (this.inView(b.x - b.r, b.y - b.r, b.r * 2, b.r * 2, 30)) this.drawBot(ctx, b);
     this.drawBullets(ctx, w);
+    this.drawBeams(ctx, w);
     this.drawParticles(ctx, w);
     this.drawCursorPreview(ctx);
     for (const s of w.ships) if (this.inView(s.x, s.y, s.pw, s.ph, 80)) this.drawShipBars(ctx, s);
@@ -142,9 +144,56 @@ class Renderer {
     vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.5)');
     ctx.fillStyle = vg; ctx.fillRect(0, 0, W_, H_);
     this.drawOffscreenIndicators(ctx);
+    this.drawEvaHud(ctx);
+    this.drawHeatBar(ctx);
     if (g.shapeWheel) this.drawShapeWheel(ctx);
     this.miniT -= dt;
     if (this.miniT <= 0) { this.drawMinimap(); this.miniT = 0.12; }
+  }
+
+  // calor da pistola laser, embaixo do cursor
+  drawHeatBar(ctx) {
+    const g = this.game, p = g.player;
+    if (!g.running || !p.held || p.held.item !== 'laser_gun' || p.mode !== 'walk') return;
+    if (p.heat <= 0.01 && !p.overheat) return;
+    const x = g.mouse.x - 18, y = g.mouse.y + 16, w = 36;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; rrect(ctx, x - 2, y - 2, w + 4, 8, 3); ctx.fill();
+    const blink = p.overheat && Math.sin(g.time * 14) > 0;
+    ctx.fillStyle = p.overheat ? (blink ? '#ff3030' : '#ff8a5a') : p.heat > 0.7 ? '#ffb040' : '#ff7ae0';
+    ctx.fillRect(x, y, w * clamp(p.heat, 0, 1), 4);
+    if (p.overheat) {
+      ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillText('SUPERAQUECIDA', g.mouse.x + 1, y + 17);
+      ctx.fillStyle = '#ff7a5a'; ctx.fillText('SUPERAQUECIDA', g.mouse.x, y + 16);
+    }
+  }
+
+  // oxigênio, jato e vida quando está fora da nave
+  drawEvaHud(ctx) {
+    const g = this.game, p = g.player;
+    if (!g.running || g.here === g.ship) return;
+    const W_ = innerWidth, H_ = innerHeight;
+    const x0 = W_ / 2 - 110, y0 = H_ - 186;
+    const bar = (i, label, f, col, extra) => {
+      const y = y0 + i * 15;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; rrect(ctx, x0 - 4, y - 2, 228, 13, 4); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(x0 + 62, y + 1, 150, 7);
+      ctx.fillStyle = col; ctx.fillRect(x0 + 62, y + 1, 150 * clamp(f, 0, 1), 7);
+      ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#e8eef5'; ctx.fillText(label, x0, y + 5);
+      if (extra) { ctx.textAlign = 'right'; ctx.fillStyle = '#ffd27a'; ctx.fillText(extra, x0 + 212, y + 5); }
+      ctx.textBaseline = 'alphabetic';
+    };
+    const tied = !!p.tether;
+    const o2c = p.o2 < 0.25 ? (Math.sin(g.time * 10) > 0 ? '#ff5050' : '#ff9a7a') : '#7fd8ff';
+    bar(0, 'Oxigênio', p.o2, o2c, tied ? 'corda' : '');
+    bar(1, 'Jato', p.fuel, p.fuel < 0.2 ? '#ff9a5a' : '#ffd84a', tied ? 'corda' : '');
+    bar(2, 'Vida', p.hp / EVA.hp, p.hp < 35 ? '#ff5050' : '#7fe07f', '');
+    if (g.inSpace) {
+      const a = g.tetherPoint();
+      ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(220,235,255,0.75)';
+      ctx.fillText(a ? `corda ${Math.round(dist(a.x, a.y, p.x + p.w / 2, p.y + p.h / 2))}/${EVA.tether}` : 'sem corda — T prende de novo perto da nave', W_ / 2, y0 - 8);
+    }
   }
 
   inView(x, y, w, h, m = 0) {
@@ -395,7 +444,7 @@ class Renderer {
     for (let y = 1; y < s.h - 1; y++) { ctx.fillRect(4, y * TS + 7, 2, 2); ctx.fillRect(pw - 6, y * TS + 7, 2, 2); }
     // interior
     const ix = TS, iy = TS, iw = pw - TS * 2, ih = ph - TS * 2;
-    ctx.fillStyle = s.team === 'player' ? '#151a22' : '#1d1518';
+    ctx.fillStyle = s.team === 'player' ? '#151a22' : s.team === 'derelict' ? '#121413' : '#1d1518';
     ctx.fillRect(ix, iy, iw, ih);
     ctx.fillStyle = 'rgba(255,255,255,0.028)';
     for (let x = 1; x < s.w - 1; x += 2) ctx.fillRect(x * TS, iy, TS, ih);
@@ -485,7 +534,7 @@ class Renderer {
       ctx.fillStyle = shade(d.color, -0.5); rrect(ctx, 4 - rec, -3.2, 19, 6.4, 1.5); ctx.fill();
       ctx.fillStyle = shade(d.color, -0.2); ctx.fillRect(5 - rec, -2.4, 16, 1.6);
       if (t.type === 'turret_burst') { ctx.fillStyle = shade(d.color, -0.5); ctx.fillRect(4 - rec, -6.4, 15, 2); ctx.fillRect(4 - rec, 4.4, 15, 2); }
-      ctx.fillStyle = t.ammoType ? AMMO[t.ammoType].color : '#3a3a3a';
+      ctx.fillStyle = d.mining ? AMMO.mining.color : t.ammoType ? AMMO[t.ammoType].color : '#3a3a3a';
       ctx.fillRect(19 - rec, -3.2, 4, 6.4);
       ctx.restore();
       const dg = ctx.createRadialGradient(-3, -3, 1, 0, 0, 10.5);
@@ -495,7 +544,7 @@ class Renderer {
       ctx.strokeStyle = shade(d.color, -0.6); ctx.lineWidth = 1; ctx.stroke();
       if (g.player && (g.player.ctrl === t || (g.player.mode === 'gunner' && g.player.ctrl && g.player.ctrl.side === t.side && !d.rc))) { ctx.strokeStyle = '#ffd84a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.stroke(); }
       // munição (só na própria nave e com o zoom perto): "13/24", no estilo da quantidade dos itens
-      if (ammoAlpha > 0) {
+      if (ammoAlpha > 0 && !d.mining) {
         const txt = `${t.ammo}/${d.cap}`;
         ctx.globalAlpha = ammoAlpha;
         ctx.font = 'bold 6px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
@@ -505,18 +554,103 @@ class Renderer {
       }
       ctx.restore();
     }
-    // tripulação
+    // drones de vigia
+    for (const d of s.drones || []) this.drawDrone(ctx, d);
+    // tripulação (quem está dentro desta nave)
+    // numa nave abandonada todo mundo está de traje (não tem ar)
+    const draw = (q) => (s.team === 'derelict' ? this.drawSuited(ctx, q) : this.drawPlayer(ctx, q));
     for (const c of s.crewNet || []) {
-      if (s === g.ship && c.id === g.pid) continue;
-      this.drawPlayer(ctx, c);
+      if (s === g.here && c.id === g.pid) continue;
+      draw(c);
     }
-    if (s === g.ship && g.player) this.drawPlayer(ctx, g.player);
+    if (s === g.here && g.player && g.running) draw(g.player);
+    // nave abandonada: sem energia, interior mais escuro
+    if (s.team === 'derelict') { ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(ix, iy, iw, ih); }
     if (s.team === 'pirate') this.drawPirateCrew(ctx, s);
     if (s.hitFlash > 0 && s.shield <= 0) {
       ctx.fillStyle = `rgba(255,80,40,${s.hitFlash * 0.25})`;
       rrect(ctx, 0, 0, pw, ph, 5); ctx.fill();
     }
     ctx.restore();
+  }
+
+  drawDrone(ctx, d) {
+    const x = d.x + 5, y = d.y + 5, t = this.game.time;
+    ctx.save(); ctx.translate(x, y);
+    ctx.fillStyle = 'rgba(255,60,60,0.12)'; ctx.beginPath(); ctx.arc(0, 0, 9, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = d.flash > 0 ? '#ffffff' : '#5a5f68'; ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#2a2d33'; ctx.lineWidth = 1; ctx.stroke();
+    // hélices
+    ctx.strokeStyle = 'rgba(200,200,210,0.6)'; ctx.lineWidth = 0.8;
+    for (const sx of [-1, 1]) { const a = t * 30 * sx; ctx.beginPath(); ctx.moveTo(sx * 6 + Math.cos(a) * 3, -4 + Math.sin(a) * 0.8); ctx.lineTo(sx * 6 - Math.cos(a) * 3, -4 - Math.sin(a) * 0.8); ctx.stroke(); }
+    ctx.fillStyle = '#ff3b3b'; ctx.beginPath(); ctx.arc(Math.sign(d.vx || 1) * 1.5, 0, 1.8, 0, Math.PI * 2); ctx.fill();
+    if (d.hp < DRONE.hp) { ctx.fillStyle = '#300'; ctx.fillRect(-5, -9, 10, 1.5); ctx.fillStyle = '#f55'; ctx.fillRect(-5, -9, 10 * clamp(d.hp / DRONE.hp, 0, 1), 1.5); }
+    ctx.restore();
+  }
+
+  // tripulantes no espaço (com corda, capacete e jato)
+  drawSpacewalkers(ctx, g, w) {
+    const list = [];
+    for (const e of w.eva || []) if (e.id !== g.pid) list.push({ p: e, anchor: e.anchor });
+    if (g.running && g.inSpace) list.push({ p: g.player, anchor: g.tetherPoint() });
+    // corda de quem está numa nave abandonada mas continua preso
+    if (g.running && g.here && g.here !== g.ship && g.player.tether) {
+      const a = g.tetherPoint(), p = g.player;
+      if (a) this.drawRope(ctx, a.x, a.y, p.wx + p.w / 2, p.wy + p.h / 2);
+    }
+    for (const { p, anchor } of list) {
+      if (!this.inView(p.x - 40, p.y - 40, 80, 80, 600)) continue;
+      if (anchor) this.drawRope(ctx, anchor.x, anchor.y, p.x + p.w / 2, p.y + p.h / 2);
+      if (p.jetting) {
+        // chama saindo para trás da direção do jato
+        const a = (p.jetDir || 0) + Math.PI, cx = p.x + p.w / 2, cy = p.y + p.h / 2 + 2;
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        for (let k = 0; k < 4; k++) {
+          const r = rand(5, 11);
+          ctx.fillStyle = choice(['rgba(255,216,74,0.8)', 'rgba(255,154,60,0.7)', 'rgba(140,210,255,0.6)']);
+          ctx.beginPath(); ctx.arc(cx + Math.cos(a) * r + rand(-1, 1), cy + Math.sin(a) * r + rand(-1, 1), rand(1, 2.2), 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.restore();
+      }
+      // flutuando: balança devagar
+      const bob = Math.sin((p.walkAnim || 0) * 1.3) * 0.8;
+      ctx.save(); ctx.translate(0, bob);
+      this.drawSuited(ctx, p);
+      ctx.restore();
+    }
+  }
+
+  // personagem de traje espacial (tanque nas costas e capacete)
+  drawSuited(ctx, p) {
+    ctx.fillStyle = '#c9ced6'; rrect(ctx, p.x + (p.facing > 0 ? -2.5 : 8.5), p.y + 7, 4, 9, 1.2); ctx.fill();
+    this.drawPlayer(ctx, p);
+    const off = p === this.game.player ? p.visOff || 0 : 0;
+    ctx.fillStyle = 'rgba(160,220,255,0.18)'; ctx.strokeStyle = 'rgba(200,235,255,0.75)'; ctx.lineWidth = 0.7;
+    ctx.beginPath(); ctx.arc(p.x + 5, p.y + 4 + off, 5.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(p.x + 3.2, p.y + 2.2 + off, 1.2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // raios da pistola laser (dentro das naves)
+  drawBeams(ctx, w) {
+    if (!w.beams || !w.beams.length) return;
+    ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+    for (const b of w.beams) {
+      const f = clamp(b.life / 0.09, 0, 1);
+      ctx.strokeStyle = AMMO.laser.color; ctx.globalAlpha = 0.35 * f; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke();
+      ctx.strokeStyle = '#ffffff'; ctx.globalAlpha = 0.9 * f; ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  drawRope(ctx, ax, ay, bx, by) {
+    const d = dist(ax, ay, bx, by), slack = clamp((EVA.tether - d) * 0.12, 0, 40);
+    const mx = (ax + bx) / 2, my = (ay + by) / 2 + slack;
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.quadraticCurveTo(mx, my, bx, by); ctx.stroke();
+    ctx.strokeStyle = d > EVA.tether * 0.95 ? '#ffd27a' : '#d8c8a0'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.quadraticCurveTo(mx, my, bx, by); ctx.stroke();
   }
 
   drawPirateCrew(ctx, s) {
@@ -590,6 +724,15 @@ class Renderer {
 
   drawShipBars(ctx, s) {
     const zoom = this.game.cam.zoom, k = 1 / zoom;
+    if (s.team === 'derelict') {
+      ctx.save(); ctx.translate(s.cx, s.y - 10 * k); ctx.scale(k, k);
+      ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(s.name, 0, 0);
+      ctx.fillStyle = '#c8cfa8'; ctx.fillText(s.name, 0, 0);
+      ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(200,210,180,0.7)'; ctx.fillText('nave abandonada', 0, 11);
+      ctx.restore();
+      return;
+    }
     const w = clamp(s.pw * zoom * 0.55, 90, 210);
     ctx.save(); ctx.translate(s.cx, s.y - 14 * k - 9); ctx.scale(k, k);
     ctx.fillStyle = 'rgba(0,0,0,0.55)'; rrect(ctx, -w / 2 - 2, -14, w + 4, 15, 4); ctx.fill();
@@ -687,15 +830,23 @@ class Renderer {
 
   // ---------- pré-visualização de construção ----------
   drawCursorPreview(ctx) {
-    const g = this.game, p = g.player, s = g.ship;
-    if (!p || !s || p.mode !== 'walk' || g.ui.blocking()) return;
+    const g = this.game, p = g.player;
+    if (!p || !g.running || p.mode !== 'walk' || g.ui.blocking()) return;
+    if (g.inSpace) { this.drawSpacePreview(ctx); return; }
+    const s = g.loc, derelict = s.team === 'derelict';
     const m = g.mouseWorld;
     const lx = m.x - s.x, ly = m.y - s.y;
     const cx = Math.floor(lx / TS), cy = Math.floor(ly / TS);
     const h = p.held;
     const inReach = dist(p.cxL, p.cyL, lx, ly) <= REACH;
     ctx.save(); ctx.translate(s.x, s.y);
-    if (h) {
+    if (h && derelict) {
+      const d = ITEMS[h.item];
+      if (d.tool === 'wrench' || d.tool === 'shredder') {
+        ctx.strokeStyle = inReach ? 'rgba(255,220,80,0.8)' : 'rgba(255,80,80,0.6)'; ctx.lineWidth = 1;
+        ctx.strokeRect(cx * TS + 0.5, cy * TS + 0.5, TS - 1, TS - 1);
+      }
+    } else if (h) {
       const d = ITEMS[h.item];
       if (d.kind === 'tile') {
         const ok = inReach && g.canPlaceTile(cx, cy);
@@ -760,11 +911,63 @@ class Renderer {
     ctx.restore();
   }
 
+  // no espaço: rocha alvo da broca e escotilhas para entrar
+  drawSpacePreview(ctx) {
+    const g = this.game, p = g.player, w = g.world, m = g.mouseWorld;
+    const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+    const h = p.held;
+    // escotilhas (porta do lado de fora)
+    for (const s of w.ships) {
+      if (s.team !== 'player' && s.team !== 'derelict') continue;
+      for (const o of s.objects) {
+        if (o.type !== 'airlock') continue;
+        const d = s.airlockDoor(o);
+        const near = dist(cx, cy, d.x, d.y) <= 46;
+        const over = Math.abs(m.x - (d.x + d.side * 6)) <= 14 && Math.abs(m.y - d.y) <= 20;
+        if (!over && !near) continue;
+        const mine = s === g.ship, can = mine || s.team === 'derelict';
+        const r = { x: d.side < 0 ? d.x - 8 : d.x, y: d.y - 16, w: 8, h: 30 };
+        ctx.strokeStyle = !can ? 'rgba(255,90,90,0.8)' : near ? 'rgba(83,255,91,0.9)' : 'rgba(255,255,255,0.6)'; ctx.lineWidth = 0.8;
+        this.drawCorners(ctx, r.x, r.y, r.w, r.h, 4);
+        if (over) {
+          ctx.font = 'bold 4.5px sans-serif'; ctx.textAlign = 'center';
+          ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 1.5;
+          ctx.fillStyle = '#53ff5b'; ctx.fillText('Escotilha de Tripulação', r.x + r.w / 2, r.y - 6);
+          ctx.font = '3.8px sans-serif';
+          ctx.fillStyle = !can ? '#ff8a7a' : near ? '#a6ffab' : '#ff8a7a';
+          ctx.fillText(!can ? 'nave de outro jogador' : near ? 'clique para entrar' : 'chegue mais perto', r.x + r.w / 2, r.y - 1.5);
+          ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+        }
+      }
+    }
+    // broca: bloco sob o mouse
+    if (h && h.item === 'drill') {
+      const tx = Math.floor(m.x / WTS), ty = Math.floor(m.y / WTS), t = w.getW(tx, ty);
+      if (t !== W.EMPTY) {
+        const nx = clamp(cx, tx * WTS, (tx + 1) * WTS), ny = clamp(cy, ty * WTS, (ty + 1) * WTS);
+        const ok = t !== W.WALL && dist(cx, cy, nx, ny) <= EVA.drillRange;
+        ctx.strokeStyle = t === W.WALL ? 'rgba(255,90,90,0.6)' : ok ? 'rgba(255,210,90,0.9)' : 'rgba(255,255,255,0.35)'; ctx.lineWidth = 2;
+        this.drawCorners(ctx, tx * WTS + 2, ty * WTS + 2, WTS - 4, WTS - 4, 16);
+        if (ok && g.mouse.left) {
+          ctx.strokeStyle = 'rgba(255,220,120,0.8)'; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(nx + rand(-2, 2), ny + rand(-2, 2)); ctx.stroke();
+        }
+        const max = W_HP[t], hp = w.thp[ty * w.n + tx];
+        if (t !== W.WALL && hp < max) {
+          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(tx * WTS + 24, ty * WTS + WTS / 2 - 3, WTS - 48, 6);
+          ctx.fillStyle = '#ffd27a'; ctx.fillRect(tx * WTS + 24, ty * WTS + WTS / 2 - 3, (WTS - 48) * clamp(hp / max, 0, 1), 6);
+        }
+      }
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, EVA.drillRange, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
   // ---------- dica ao passar o mouse ----------
   // Mesma prioridade do clique: item solto > torreta > construção.
   // Blocos (escada, passarela etc.) não têm dica: só o que tem função.
   hoverInfo(lx, ly, cx, cy, h) {
-    const s = this.game.ship;
+    const g = this.game, s = g.loc;
     const hd = h ? ITEMS[h.item] : null;
     const wrench = hd && hd.tool === 'wrench';
     const L = [];                       // linhas: { t, c }
@@ -786,7 +989,8 @@ class Renderer {
     if (!t) for (const x of s.turrets) { const q = s.turretLocal(x); if (dist(lx, ly, q.x, q.y) < 14) { t = x; break; } }
     if (t) {
       const td = TURRETS[t.type], q = s.turretLocal(t);
-      info(t.ammo > 0 ? `Munição ${t.ammo}/${td.cap}${t.ammoType ? ' • ' + AMMO[t.ammoType].name : ''}` : 'Sem munição', t.ammo > 0 ? '#d8d8d8' : '#ff8a7a');
+      if (td.mining) info('Quebra blocos do mapa • não usa munição', '#7dffe0');
+      else info(t.ammo > 0 ? `Munição ${t.ammo}/${td.cap}${t.ammoType ? ' • ' + AMMO[t.ammoType].name : ''}` : 'Sem munição', t.ammo > 0 ? '#d8d8d8' : '#ff8a7a');
       if (t.hp !== undefined) hpLine(t.hp, 60);
       if (wrench) hint('Segure para desmontar');
       else if (hd && hd.kind === 'ammo') hint('Carregar (Shift: pilha toda)');
@@ -819,6 +1023,10 @@ class Renderer {
           break;
         }
         case 'door': info(o.open ? 'Aberta' : 'Fechada'); if (!wrench) hint(o.open ? 'fechar' : 'abrir'); break;
+        case 'airlock':
+          if (s.team === 'player') info(g.tetherPref ? 'Corda: ligada (T muda)' : 'Corda: desligada (T muda)', g.tetherPref ? '#d8d8d8' : '#ffb070');
+          if (!wrench || s.team === 'derelict') hint('sair para o espaço');
+          break;
         case 'hatch': {
           info(o.open ? 'Aberta' : 'Fechada', o.open ? '#8aff8a' : '#ff8a7a');
           const f = o.filter || [], names = f.length > 2 ? `${f.length} itens` : f.map((k) => ITEMS[k].name).join(', ');
@@ -983,8 +1191,11 @@ class Renderer {
       ctx.fillStyle = `rgba(${GREEN},0.9)`;
       const arrow = (x, y) => { ctx.beginPath(); if (X) { ctx.moveTo(x + 1, y - 3); ctx.lineTo(x + 6, y); ctx.lineTo(x + 1, y + 3); } else { ctx.moveTo(x - 3, y + 1); ctx.lineTo(x, y + 6); ctx.lineTo(x + 3, y + 1); } ctx.fill(); };
       if (X) { arrow(v, -3); arrow(v, s.ph + 3); } else { arrow(-3, v); arrow(s.pw + 3, v); }
-      label = s.w + (X ? 1 : 0) > MAX_SHIP_TILES || s.h + (X ? 0 : 1) > MAX_SHIP_TILES ? 'Tamanho máximo atingido' : `Inserir ${X ? 'coluna' : 'linha'} aqui`;
-      if (label !== `Inserir ${X ? 'coluna' : 'linha'} aqui`) ok = false;
+      label = `Inserir ${X ? 'coluna' : 'linha'} aqui`;
+      if (g.world.zoneId !== 'freeport') { label = 'O Ampliador só funciona no Porto Livre'; ok = false; }
+      else if (s.w + (X ? 1 : 0) > MAX_SHIP_TILES || s.h + (X ? 0 : 1) > MAX_SHIP_TILES) { label = 'Tamanho máximo atingido'; ok = false; }
+      else if (!g.world.rectFree(s.x, s.y, s.pw + (X ? TS : 0), s.ph + (X ? 0 : TS))) { label = 'Sem espaço para crescer: afaste-se das paredes'; ok = false; }
+      if (!ok) { ctx.strokeStyle = `rgba(${RED},0.95)`; ctx.lineWidth = 2; ctx.setLineDash([5, 3]); ctx.beginPath(); if (X) { ctx.moveTo(v, -6); ctx.lineTo(v, s.ph + 6); } else { ctx.moveTo(-6, v); ctx.lineTo(s.pw + 6, v); } ctx.stroke(); ctx.setLineDash([]); }
     } else {
       const people = [g.player, ...(s.crewNet || [])].filter((p) => p && p.x !== undefined && (p.mode === 'walk' || p.mode === undefined))
         .map((p) => ({ x: p.x, y: p.y, w: p.w || 12, h: p.h || 22 }));
@@ -1144,9 +1355,12 @@ class Renderer {
       ctx.restore();
       if (label) { ctx.fillStyle = color; ctx.font = '11px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(label, px, py - 14); }
     };
+    const me = g.player && g.running ? { x: g.player.wx, y: g.player.wy } : { x: s.cx, y: s.cy };
     for (const sh of w.ships) {
-      if (sh === s || dist(sh.cx, sh.cy, s.cx, s.cy) > 2600) continue;
-      mark(sh.cx, sh.cy, sh.team === 'pirate' ? '#ff6a6a' : w.zone.pvp ? '#ffb05a' : '#7fe0ff', sh.name);
+      if (sh === s && g.here === s) continue;
+      if (dist(sh.cx, sh.cy, me.x, me.y) > 2600) continue;
+      if (sh === s) { mark(sh.cx, sh.cy, '#ffffff', 'Sua nave'); continue; }
+      mark(sh.cx, sh.cy, sh.team === 'pirate' ? '#ff6a6a' : sh.team === 'derelict' ? '#c8cfa8' : w.zone.pvp ? '#ffb05a' : '#7fe0ff', sh.name);
     }
     if (g.player && g.player.mode !== 'helm') { /* nada */ }
   }
@@ -1178,8 +1392,9 @@ class Renderer {
     }
     for (const b of w.bots) { m.fillStyle = BOTS[b.type].color; m.fillRect(b.x * k - 1, b.y * k - 1, 2, 2); }
     for (const c of w.crates) { m.fillStyle = '#d0a060'; m.fillRect(c.x * k - 1, c.y * k - 1, 2, 2); }
+    if (g.inSpace) { m.fillStyle = '#ffd84a'; m.fillRect(g.player.x * k - 1.5, g.player.y * k - 1.5, 3, 3); }
     for (const s of w.ships) {
-      m.fillStyle = s === g.ship ? '#ffffff' : s.team === 'player' ? '#5fd8ff' : '#ff5050';
+      m.fillStyle = s === g.ship ? '#ffffff' : s.team === 'player' ? '#5fd8ff' : s.team === 'derelict' ? '#a8b090' : '#ff5050';
       m.fillRect(s.x * k - 1, s.y * k - 1, Math.max(3, s.pw * k), Math.max(3, s.ph * k));
     }
     // vista da câmera

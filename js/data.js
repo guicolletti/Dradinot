@@ -77,6 +77,8 @@ const AMMO = {
   punch:    { name: 'Soco', color: '#9dff7a', shots: 3, dmg: 6, speed: 800, life: 1.1, knock: 260, r: 4 },
   yank:     { name: 'Puxão', color: '#d68cff', shots: 3, dmg: 5, speed: 800, life: 1.1, knock: -260, r: 4 },
   slug:     { name: 'Perfurante', color: '#c8c8c8', shots: 1, dmg: 40, speed: 420, life: 2.6, pierce: 4, rof: 1.8, r: 5 },
+  mining:   { name: 'Feixe de Mineração', color: '#7dffe0', dmg: 30, speed: 900, life: 0.5, r: 2, mining: true },
+  laser:    { name: 'Laser', color: '#ff4fd8', dmg: 7, speed: 1150, life: 0.45, r: 2, noTerrain: true },   // pistola do tripulante
   trash:    { name: 'Lixo', color: '#8a7a5a', shots: 4, dmg: 3, speed: 650, life: 0.8, decay: true, r: 3 },
   // munições de bots (não fabricáveis)
   bot_red:   { name: 'Bala de Bot', color: '#ff3b3b', dmg: 6, speed: 520, life: 2.2, r: 4 },
@@ -94,6 +96,8 @@ const TURRETS = {
   turret_auto:  { name: 'Torreta Automática', color: '#9aa7b8', rof: 0.14, burst: 1, auto: true, cap: 36, rc: false, dmgMul: 0.75 },
   turret_burst: { name: 'Torreta de Rajada', color: '#a69a8d', rof: 0.95, burst: 3, burstGap: 0.07, auto: false, cap: 30, rc: false },
   turret_rc:    { name: 'Torreta RC', color: '#e8853a', rof: 0.42, burst: 1, auto: true, cap: 24, rc: true },
+  // não usa munição: dispara um feixe que só quebra blocos do mapa (não fere naves nem bots)
+  turret_mining: { name: 'Torreta Mineradora', color: '#4fb8a0', rof: 0.3, burst: 1, auto: true, cap: 0, rc: false, mining: true },
 };
 
 // ---------- Objetos (construíveis dentro da nave) ----------
@@ -114,6 +118,7 @@ const OBJECTS = {
   gunnery:       { name: 'Posto de Artilharia', w: 2, h: 2, floor: true, hp: 60, color: '#4e4466' },
   ammo_crate:    { name: 'Caixa de Munição', w: 2, h: 2, floor: true, hp: 70, color: '#5b6b3a' },
   loader:        { name: 'Carregador', w: 1, h: 1, floor: false, hp: 60, color: '#b8862e', solid: true },
+  airlock:       { name: 'Escotilha de Tripulação', w: 1, h: 2, floor: true, hp: 70, color: '#3f7f9f' },
 };
 
 // ---------- Itens ----------
@@ -144,11 +149,13 @@ const ITEMS = {
   door:            { name: 'Porta', kind: 'object', obj: 'door', stack: 1, color: '#7f8590', desc: 'Clique para abrir/fechar.' },
   gunnery:         { name: 'Posto de Artilharia', kind: 'object', obj: 'gunnery', stack: 1, color: '#7a6aa0', desc: 'Sente nele para mirar e atirar com todas as torretas comuns (não RC) de um lado da nave ao mesmo tempo. Segure R para escolher o lado; sentado, R troca de lado.' },
   ammo_crate:      { name: 'Caixa de Munição', kind: 'object', obj: 'ammo_crate', stack: 1, color: '#6f8248', desc: 'Guarda um tipo de munição. Com um Trilho encostado nela, solta um carrinho que leva até 16 munições e reabastece as torretas pelo caminho.' },
+  airlock:         { name: 'Escotilha de Tripulação', kind: 'object', obj: 'airlock', stack: 4, color: '#4f9fbf', desc: 'Porta para os tripulantes saírem ao espaço. Vai encostada na parede esquerda ou direita da nave.' },
   loader:          { name: 'Carregador', kind: 'object', obj: 'loader', stack: 8, color: '#d09a3a', desc: 'Bloco com braço: pega itens de um lado e coloca do outro (chão, máquinas, torretas ou outro Carregador). Segure R para escolher as direções; clique nele construído para filtros.' },
 
   turret:       { name: 'Torreta', kind: 'turret', turret: 'turret', stack: 1, color: '#8d97a6', desc: 'Torreta manual. Instale no casco externo.' },
   turret_auto:  { name: 'Torreta Automática', kind: 'turret', turret: 'turret_auto', stack: 1, color: '#9aa7b8', desc: 'Dispara enquanto o botão estiver pressionado.' },
   turret_burst: { name: 'Torreta de Rajada', kind: 'turret', turret: 'turret_burst', stack: 1, color: '#a69a8d', desc: 'Dispara rajadas de 3.' },
+  turret_mining: { name: 'Torreta Mineradora', kind: 'turret', turret: 'turret_mining', stack: 1, color: '#4fb8a0', desc: 'Quebra os blocos do mapa (pedra, fluxo, diamante) com um feixe curto. Não usa munição e não fere naves nem bots. Instale no casco externo.' },
   turret_rc:    { name: 'Torreta RC', kind: 'turret', turret: 'turret_rc', stack: 1, color: '#e8853a', desc: 'Controlada pelo leme (clique esquerdo ao pilotar).' },
 
   ammo_standard: { name: 'Munição Padrão', kind: 'ammo', ammo: 'standard', stack: 16, color: AMMO.standard.color },
@@ -166,6 +173,8 @@ const ITEMS = {
   embiggener: { name: 'Ampliador de Nave', kind: 'tool', tool: 'embiggener', stack: 16, color: '#5ad18a', desc: 'Aumenta a nave. R muda o eixo.' },
   shrinker:   { name: 'Encolhedor de Nave', kind: 'tool', tool: 'shrinker', stack: 16, color: '#d1a05a', desc: 'Diminui a nave. R muda o eixo.' },
   repair:     { name: 'Kit de Reparo', kind: 'tool', tool: 'repair', stack: 16, color: '#ffd0a0', desc: 'Restaura a integridade do casco.' },
+  drill:      { name: 'Broca de Mão', kind: 'tool', tool: 'drill', stack: 1, color: '#e0a040', desc: 'Fora da nave: segure o clique numa rocha próxima para minerar. Só quebra o mapa.' },
+  laser_gun:  { name: 'Pistola Laser', kind: 'tool', tool: 'laser', stack: 1, color: '#ff4fd8', desc: 'Fora da nave: segure o clique para atirar. Não usa munição, mas superaquece e precisa esfriar.' },
 
   boots:   { name: 'Botas Saltadoras', kind: 'equip', slot: 'feet', stack: 1, color: '#d0d070', desc: 'Pulos mais altos.' },
   speed:   { name: 'Botas de Velocidade', kind: 'equip', slot: 'feet', stack: 1, color: '#70d0d0', desc: 'Corre mais rápido.' },
@@ -192,8 +201,10 @@ const RECIPES = {
     R('ammo_standard', 4, 2, { metal: 1, explosives: 1 }),
     R('booster', 1, 3, { metal: 2 }),
     R('wrench', 1, 10, { metal: 4 }),
+    R('drill', 1, 10, { metal: 6 }),
     R('helm', 1, 10, { metal: 8 }),
     R('hatch', 1, 10, { metal: 8 }),
+    R('airlock', 1, 10, { metal: 10 }),
     R('fab_munitions', 1, 20, { metal: 16 }),
     R('fab_engineering', 1, 20, { metal: 16 }),
     R('fab_machine', 1, 20, { metal: 16 }),
@@ -207,11 +218,13 @@ const RECIPES = {
     R('ammo_yank', 4, 2, { metal: 1, explosives: 1 }),
     R('ammo_slug', 4, 3, { metal: 1, explosives: 1 }),
     R('ammo_trash', 4, 2, {}),
+    R('laser_gun', 1, 15, { metal: 10, flux: 1 }),
     R('booster', 1, 3, { metal: 2 }),
   ],
   engineering: [
     R('rail', 4, 1, { metal: 1 }),
     R('wrench', 1, 10, { metal: 4 }),
+    R('drill', 1, 10, { metal: 6 }),
     R('shredder', 1, 10, { metal: 4 }),
     R('booster', 1, 3, { metal: 2 }),
     R('repair', 1, 4, { metal: 3 }),
@@ -231,6 +244,7 @@ const RECIPES = {
     R('recycler', 1, 20, { metal: 16 }),
     R('expando', 1, 10, { metal: 8 }),
     R('hatch', 1, 10, { metal: 8 }),
+    R('airlock', 1, 10, { metal: 10 }),
     R('ejector', 1, 10, { metal: 8 }),
     R('shield_gen', 1, 15, { metal: 12, flux: 1 }),
     R('spawn', 1, 10, { metal: 8 }),
@@ -238,12 +252,14 @@ const RECIPES = {
     R('loader', 1, 8, { metal: 8 }),
     R('ammo_crate', 1, 12, { metal: 12 }),
     R('gunnery', 1, 15, { metal: 12 }),
+    R('turret_mining', 1, 20, { metal: 14, flux: 1 }),
     R('turret', 1, 20, { metal: 12, flux: 2 }),
   ],
   equipment: [
     R('boots', 1, 15, { metal: 8, flux: 2 }),
     R('speed', 1, 15, { metal: 8, flux: 2 }),
     R('jetpack', 1, 25, { metal: 12, flux: 6 }),
+    R('laser_gun', 1, 15, { metal: 10, flux: 1 }),
   ],
 };
 
@@ -274,49 +290,49 @@ const ZONES = {
   freeport: {
     name: 'Porto Livre', safe: true, pvp: false, size: 44,
     bg: ['#0d1a2b', '#132840'], rock: '#3a4a5e', rockEdge: '#56708c',
-    density: 0.0, bots: [], botCount: 0, ships: 0, diamond: 0, flux: 0,
+    density: 0.0, bots: [], botCount: 0, ships: 0, derelicts: 0, diamond: 0, flux: 0,
     portals: ['hummingbird', 'finch'], desc: 'Zona segura. O jogo é salvo aqui.',
   },
   hummingbird: {
     name: 'Beija-flor', safe: false, pvp: false, size: 60,
     bg: ['#10202a', '#1b3a3a'], rock: '#4a5a4a', rockEdge: '#6f8a6a',
-    density: 0.36, bots: [['red', 10], ['blue', 1]], botCount: 18, ships: 0, diamond: 0.01, flux: 0.01,
+    density: 0.36, bots: [['red', 10], ['blue', 1]], botCount: 18, ships: 0, derelicts: 2, diamond: 0.01, flux: 0.01,
     portals: ['freeport', 'finch'], desc: 'Zona inicial. Bots vermelhos.',
   },
   finch: {
     name: 'Tentilhão', safe: false, pvp: false, size: 66,
     bg: ['#1c1830', '#2b2346'], rock: '#5a4a6a', rockEdge: '#82709a',
-    density: 0.4, bots: [['red', 7], ['blue', 3], ['green', 1]], botCount: 24, ships: 1, diamond: 0.02, flux: 0.025,
+    density: 0.4, bots: [['red', 7], ['blue', 3], ['green', 1]], botCount: 24, ships: 1, derelicts: 2, diamond: 0.02, flux: 0.025,
     portals: ['freeport', 'hummingbird', 'sparrow'], desc: 'Bots vermelhos e azuis. Algumas naves piratas.',
   },
   sparrow: {
     name: 'Pardal', safe: false, pvp: true, size: 74,
     bg: ['#2a1414', '#3e1d1d'], rock: '#6a4a3e', rockEdge: '#9a6a52',
-    density: 0.42, bots: [['red', 5], ['blue', 4], ['green', 2]], botCount: 26, ships: 3, diamond: 0.05, flux: 0.04,
+    density: 0.42, bots: [['red', 5], ['blue', 4], ['green', 2]], botCount: 26, ships: 3, derelicts: 3, diamond: 0.05, flux: 0.04,
     portals: ['finch', 'pits', 'canary', 'vulture', 'falcon'], desc: 'Zona de combate (JxJ). Naves piratas!',
   },
   falcon: {
     name: 'Falcão', safe: false, pvp: true, size: 80,
     bg: ['#140e05', '#2a1d08'], rock: '#6a5a2e', rockEdge: '#a08a4a',
-    density: 0.38, bots: [['red', 3], ['blue', 5], ['green', 2]], botCount: 28, ships: 5, diamond: 0.06, flux: 0.06,
+    density: 0.38, bots: [['red', 3], ['blue', 5], ['green', 2]], botCount: 28, ships: 5, derelicts: 3, diamond: 0.06, flux: 0.06,
     portals: ['sparrow', 'freeport'], desc: 'Zona perigosa. Muitas naves e saque raro.',
   },
   pits: {
     name: 'Os Fossos', safe: false, pvp: true, size: 56, mission: true,
     bg: ['#0a0a0a', '#1d1d1d'], rock: '#4e4e4e', rockEdge: '#7a7a7a',
-    density: 0.58, bots: [['red', 6], ['blue', 6]], botCount: 36, ships: 1, diamond: 0.16, flux: 0.03,
+    density: 0.58, bots: [['red', 6], ['blue', 6]], botCount: 36, ships: 1, derelicts: 1, diamond: 0.16, flux: 0.03,
     portals: ['sparrow', 'freeport'], desc: 'Missão: terreno denso cheio de diamantes.',
   },
   canary: {
     name: 'Canário', safe: false, pvp: true, size: 56, mission: true,
     bg: ['#2a2a08', '#3d3a10'], rock: '#7a7030', rockEdge: '#b0a050',
-    density: 0.4, bots: [['green', 8], ['red', 2]], botCount: 30, ships: 1, diamond: 0.05, flux: 0.12,
+    density: 0.4, bots: [['green', 8], ['red', 2]], botCount: 30, ships: 1, derelicts: 1, diamond: 0.05, flux: 0.12,
     portals: ['sparrow', 'freeport'], desc: 'Missão: bots verdes e muito fluxo.',
   },
   vulture: {
     name: 'Abutre', safe: false, pvp: true, size: 64, mission: true,
     bg: ['#1a0820', '#2e0e38'], rock: '#5a2e6a', rockEdge: '#8a52a0',
-    density: 0.3, bots: [['blue', 5], ['red', 3]], botCount: 18, ships: 6, boss: true, diamond: 0.06, flux: 0.05,
+    density: 0.3, bots: [['blue', 5], ['red', 3]], botCount: 18, ships: 6, derelicts: 1, boss: true, diamond: 0.06, flux: 0.05,
     portals: ['sparrow', 'freeport'], desc: 'Missão: frota pirata e uma nave chefe.',
   },
 };
@@ -366,5 +382,20 @@ const LOOT_TABLES = {
 };
 
 // Caixa expansível: guarda um único tipo de item, até o equivalente a 24 pilhas dele
+// ---------- fora da nave (EVA) ----------
+// o2/fuel: segundos até acabar; com a corda presa à nave os dois não gastam
+const EVA = {
+  o2: 90, fuel: 16, accel: 430, max: 240, hp: 100,
+  tether: 520,          // comprimento da corda (px)
+  drill: 48,            // dano por segundo da broca nas rochas
+  drillRange: 46,       // distância máxima do personagem até a rocha
+  suffocate: 14,        // dano por segundo sem oxigênio
+};
+// pistola laser: sem munição; cada tiro esquenta, e superaquecida só volta depois de esfriar tudo
+const LASER = { rof: 0.2, heat: 0.085, cool: 0.32, overCool: 0.42, range: 150 };
+const DRONE = { hp: 40, speed: 95, accel: 320, sight: 230, dmg: 14, hitCool: 0.9 };
+const DERELICT_NAMES = ['Cargueiro Abandonado', 'Destroço Silencioso', 'Nave Fantasma', 'Casco Esquecido', 'Sucata Errante',
+  'Mineradora Perdida', 'Estação Partida', 'Rebocador Vazio'];
+
 const EXPANDO_STACKS = 24;
 function expandoCap(item) { return item ? ITEMS[item].stack * EXPANDO_STACKS : 0; }

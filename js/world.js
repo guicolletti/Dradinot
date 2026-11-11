@@ -141,6 +141,20 @@ class World {
   }
 
   playerShips() { return this.ships.filter((s) => s.team === 'player' && !s.dead); }
+  // personagens que estão fisicamente dentro da nave s (tripulantes de qualquer nave; só no servidor)
+  occupants(s) {
+    const out = [];
+    const add = (c) => { if (c.player && c.player.ship === s && !out.includes(c.player)) out.push(c.player); };
+    for (const c of s.crew || []) add(c);
+    for (const sh of this.ships || []) if (sh !== s && sh.team === 'player') for (const c of sh.crew || []) add(c);
+    return out;
+  }
+  // tripulantes soltos no espaço: [{ sess, p }]
+  spacewalkers() {
+    const out = [];
+    for (const sh of this.ships || []) if (sh.team === 'player') for (const c of sh.crew || []) if (c.player && !c.player.ship) out.push({ sess: c, p: c.player });
+    return out;
+  }
   avoidPlayers(r) { return this.playerShips().map((s) => ({ x: s.cx, y: s.cy, r })); }
 
   // avoid: lista de {x,y,r}
@@ -189,6 +203,14 @@ class World {
     });
   }
 
+  // raio da pistola laser dentro das naves (só efeito visual)
+  laserFx(x1, y1, x2, y2) {
+    if (this.headless) { this.fx.push(['lz', Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2)]); return; }
+    this.beams = this.beams || [];
+    this.beams.push({ x1, y1, x2, y2, life: 0.09 });
+    this.spark(x2, y2, AMMO.laser.color, 3, 60);
+  }
+
   breakFx(cx, cy, t) {
     if (this.headless) { this.fx.push(['tb', Math.round(cx), Math.round(cy), t]); return; }
     for (let k = 0; k < 18; k++) this.particles.push({
@@ -225,6 +247,7 @@ class World {
       switch (e[0]) {
         case 'sp': this.spark(e[1], e[2], e[3], e[4], e[5]); break;
         case 'tb': this.breakFx(e[1], e[2], e[3]); break;
+        case 'lz': this.laserFx(e[1], e[2], e[3], e[4]); break;
         case 'ex': this.explosion(e[1], e[2], e[3]); break;
         case 'so': this.sound(e[1], e[2], e[3]); break;
         case 'sh': this.shake(e[1], e[2], e[3]); break;
@@ -269,9 +292,18 @@ class World {
   fireTurret(ship, t, infiniteAmmo = false, onEmpty = null) {
     const d = TURRETS[t.type];
     if (t.cool > 0) return false;
-    if (!infiniteAmmo && (t.ammo <= 0 || !t.ammoType)) {
+    if (!d.mining && !infiniteAmmo && (t.ammo <= 0 || !t.ammoType)) {
       if (!t.emptyClick) { if (onEmpty) onEmpty(); t.emptyClick = 0.4; }
       return false;
+    }
+    if (d.mining) {
+      // mineradora: munição infinita, cadência própria (fora do ritmo das armas)
+      t.cool = d.rof; t.burstLeft = 0;
+      const p = ship.turretWorld(t);
+      this.fireBullet(p.x + Math.cos(t.angle) * 16, p.y + Math.sin(t.angle) * 16, t.angle, 'mining', ship.team, ship.id);
+      t.recoil = 0.5;
+      this.sound('shoot', p.x, p.y);
+      return true;
     }
     const ammoKey = t.ammoType || 'standard';
     const a = AMMO[ammoKey];
@@ -313,12 +345,15 @@ class World {
       const spot = this.findOpenSpot(ship.pw, ship.ph, 120, this.avoidPlayers(1800));
       this.addShip(ship, spot.x, spot.y);
     }
+    for (let i = 0; i < (z.derelicts || 0); i++) this.spawnDerelict(900);
     this.shipTimer = 30;
+    this.derelictTimer = 90;
   }
 
   update(dt) {
     if (!this.populated) this.populate();
     this.time += dt;
+    this.eva = this.spacewalkers();
     for (const s of this.ships.slice()) this.updateShip(s, dt);
     this.shipCollisions();
     this.updateBullets(dt);
@@ -330,14 +365,39 @@ class World {
   }
 
   updateParticles(dt) {
+    if (this.beams) { for (const b of this.beams) b.life -= dt; this.beams = this.beams.filter((b) => b.life > 0); }
     for (const p of this.particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.96; p.vy *= 0.96; p.life -= dt; }
     this.particles = this.particles.filter((p) => p.life > 0);
     if (this.particles.length > 1500) this.particles.splice(0, this.particles.length - 1500);
     for (const p of this.portals) p.phase += dt;
   }
 
+  spawnDerelict(avoidR = 1400) {
+    const ship = buildDerelict();
+    const spot = this.findOpenSpot(ship.pw, ship.ph, 140, this.avoidPlayers(avoidR));
+    this.addShip(ship, spot.x, spot.y);
+    return ship;
+  }
+
+  // naves abandonadas: quando saqueadas (e sem ninguém dentro) somem; outras aparecem com o tempo
+  derelictUpkeep(dt) {
+    for (const s of this.ships) {
+      if (s.team !== 'derelict') continue;
+      const empty = !s.items.length && !s.objects.some((o) => o.store && o.store.n > 0);
+      if (!empty) { s.goneT = null; continue; }
+      if (this.occupants(s).length) continue;
+      s.goneT = (s.goneT ?? 40) - dt;
+      if (s.goneT <= 0) { s.dead = true; this.spark(s.cx, s.cy, '#9aa', 20, 200); }
+    }
+    this.ships = this.ships.filter((s) => !(s.team === 'derelict' && s.dead));
+    const z = this.zone, n = this.ships.filter((s) => s.team === 'derelict').length;
+    this.derelictTimer = (this.derelictTimer ?? 90) - dt;
+    if (n < (z.derelicts || 0) && this.derelictTimer <= 0) { this.derelictTimer = 90; this.spawnDerelict(); }
+  }
+
   spawner(dt) {
     const z = this.zone;
+    this.derelictUpkeep(dt);
     this.botTimer -= dt;
     if (this.botTimer <= 0 && this.bots.length < z.botCount) {
       this.botTimer = 2.5;
@@ -414,6 +474,50 @@ class World {
       if (s.lastHit > 5) s.shield = Math.min(s.maxShield, s.shield + 10 * dt);
     }
     if (s.team === 'player') this.updateShipInterior(s, dt);
+    if (s.team === 'derelict') { this.updateShipInterior(s, dt); this.updateDrones(s, dt); }
+  }
+
+  // ---------- drones de vigia (naves abandonadas) ----------
+  updateDrones(s, dt) {
+    if (!s.drones || !s.drones.length) return;
+    const people = this.occupants(s);
+    for (const d of s.drones) {
+      d.flash = Math.max(0, d.flash - dt * 4);
+      d.cool = Math.max(0, d.cool - dt);
+      const cx = d.x + 5, cy = d.y + 5;
+      let tgt = null, bd = DRONE.sight;
+      for (const p of people) { const dd = dist(cx, cy, p.cxL, p.cyL); if (dd < bd) { bd = dd; tgt = p; } }
+      let ax = 0, ay = 0, max = DRONE.speed;
+      if (tgt) { const a = Math.atan2(tgt.cyL - cy, tgt.cxL - cx); ax = Math.cos(a); ay = Math.sin(a); }
+      else { d.wander += dt * 0.7; ax = Math.cos(d.wander) * 0.4; ay = Math.sin(d.wander * 1.3) * 0.4; max = 30; }
+      d.vx += ax * DRONE.accel * dt; d.vy += ay * DRONE.accel * dt;
+      const sp = Math.hypot(d.vx, d.vy);
+      if (sp > max) { d.vx *= max / sp; d.vy *= max / sp; }
+      d.x += d.vx * dt;
+      if (s.boxHits(d.x, d.y, 10, 10, true)) { d.x -= d.vx * dt; d.vx *= -0.5; }
+      d.y += d.vy * dt;
+      if (s.boxHits(d.x, d.y, 10, 10, true)) { d.y -= d.vy * dt; d.vy *= -0.5; }
+      // encostou no personagem: choque
+      if (tgt && d.cool <= 0 && aabbOverlap(d.x - 1, d.y - 1, 12, 12, tgt.x, tgt.y, tgt.w, tgt.h)) {
+        d.cool = DRONE.hitCool;
+        tgt.hp -= DRONE.dmg;
+        d.vx = -d.vx * 0.8 - Math.sign(tgt.cxL - cx) * 60; d.vy = -d.vy * 0.8 - 30;
+        this.spark(s.x + cx, s.y + cy, '#ff6060', 8, 140);
+        this.sound('hullhit', s.x + cx, s.y + cy);
+      }
+    }
+  }
+
+  hitDrone(s, d, dmg) {
+    d.hp -= dmg; d.flash = 1;
+    this.spark(s.x + d.x + 5, s.y + d.y + 5, '#ffd27a', 4, 120);
+    this.sound('bothit', s.x + d.x + 5, s.y + d.y + 5);
+    if (d.hp <= 0) {
+      s.drones.splice(s.drones.indexOf(d), 1);
+      this.explosion(s.x + d.x + 5, s.y + d.y + 5, 0.3);
+      s.spawnItem('metal', randInt(3, 8), d.x + 5, d.y + 5, rand(-40, 40), -80);
+      if (Math.random() < 0.35) s.spawnItem('explosives', randInt(2, 5), d.x + 5, d.y + 5, rand(-40, 40), -80);
+    }
   }
 
   collideDamage(s, speed) {
@@ -476,13 +580,14 @@ class World {
   // e anda junto; andando contra um item, o personagem o empurra.
   // (O navegador faz o outro lado: o personagem fica em pé sobre os itens.)
   pushItemsByCrew(s) {
-    if (!s.crew || !s.crew.length || !s.items.length) return;
+    if (!s.items.length) return;
+    const people = this.occupants(s);
+    if (!people.length) return;
     const fits = (it, x) => {
       return !s.boxHits(x, it.y, it.w, it.h, true);
     };
-    for (const c of s.crew) {
-      const p = c.player;
-      if (!p || p.mode !== 'walk') continue;
+    for (const p of people) {
+      if (p.mode !== 'walk') continue;
       for (const it of s.items) {
         const ox = Math.min(p.x + p.w, it.x + it.w) - Math.max(p.x, it.x); // > 0: sobreposição horizontal
         const oy = Math.min(p.y + p.h, it.y + it.h) - Math.max(p.y, it.y); // > 0: sobreposição vertical
@@ -653,6 +758,14 @@ class World {
     const x0 = o.x * TS, y0 = o.y * TS;
     for (const it of s.items) if (aabbOverlap(it.x, it.y, it.w, it.h, x0, y0, od.w * TS, od.h * TS)) c++;
     return c >= 3 * od.w * od.h;
+  }
+
+  // retângulo (coordenadas do mundo) livre de blocos do mapa?
+  rectFree(x, y, w, h) {
+    for (let ty = Math.floor(y / WTS); ty <= Math.floor((y + h - 0.01) / WTS); ty++)
+      for (let tx = Math.floor(x / WTS); tx <= Math.floor((x + w - 0.01) / WTS); tx++)
+        if (this.getW(tx, ty) !== W.EMPTY) return false;
+    return true;
   }
 
   // ---------- Carregador ----------
@@ -956,7 +1069,7 @@ class World {
         const tx = Math.floor(b.x / WTS), ty = Math.floor(b.y / WTS);
         const tt = this.getW(tx, ty);
         if (tt !== W.EMPTY) {
-          if (!this.zone.safe) this.damageTerrain(tx, ty, b.dmg, b.x, b.y);
+          if (!this.zone.safe && !a.noTerrain) this.damageTerrain(tx, ty, b.dmg, b.x, b.y);
           if (b.bounces > 0) {
             b.bounces--; b.bounced = true;
             const ptx = Math.floor(px / WTS), pty = Math.floor(py / WTS);
@@ -971,10 +1084,21 @@ class World {
           if (!alive) break;
           continue;
         }
+        if (a.mining) continue;   // feixe de mineração atravessa naves e bots sem causar dano
         for (const sh of this.ships) {
           if (!this.canHitShip(b, sh)) continue;
           if (b.x < sh.x || b.y < sh.y || b.x > sh.x + sh.pw || b.y > sh.y + sh.ph) continue;
           this.hitShip(sh, b, px, py);
+          alive = false; break;
+        }
+        if (!alive) break;
+        for (const { p } of this.eva || []) {
+          if (this.zone.safe || (b.team === 'player' && !this.zone.pvp)) continue;
+          if (b.x < p.x - 2 || b.y < p.y - 2 || b.x > p.x + p.w + 2 || b.y > p.y + p.h + 2) continue;
+          if (b.ownerId && p.ship === null && this.shipById(b.ownerId) && this.shipById(b.ownerId).crew && this.shipById(b.ownerId).crew.some((c) => c.player === p)) continue;   // nave dele
+          p.hp -= b.dmg * 0.5;
+          this.spark(b.x, b.y, '#ff7070', 8, 160);
+          this.sound('hullhit', b.x, b.y);
           alive = false; break;
         }
         if (!alive) break;
@@ -1020,7 +1144,7 @@ class World {
       const k = a.knock * (b.knockMul || 1) / Math.sqrt(sh.mass) * 6;
       sh.vx += dx * k; sh.vy += dy * k;
     }
-    if (this.zone.safe) { this.spark(b.x, b.y, '#9fd8ff', 4); return; }
+    if (this.zone.safe || sh.team === 'derelict') { this.spark(b.x, b.y, '#9fd8ff', 4); return; }   // abandonadas não quebram
     sh.lastAttacker = b.ownerId;
     if (sh.shield > 0) {
       sh.shield = Math.max(0, sh.shield - b.dmg);

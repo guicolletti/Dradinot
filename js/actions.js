@@ -26,13 +26,24 @@ class Session {
     this.zoneSent = null;
     this.lastInv = ''; this.lastEq = '';
     this.chatT = 0;
+    this.tetherPref = true;  // sair pela escotilha já com a corda presa
+    this.drillT = 0;         // acumula o tempo de broca (aplica em pulsos)
   }
 
   send(m) { try { this._send(m); } catch (e) { /* conexão caiu */ } }
   get world() { return this.ship ? this.ship.world : null; }
   notify(m, c = '#fff') { this.send({ t: 'msg', m, c }); }
   sfxMe(n) { this.send({ t: 'sfx', n }); }
-  sfx(n) { const p = this.player, s = this.ship; if (s && s.world && p) s.world.sound(n, s.x + p.cxL, s.y + p.cyL); }
+  sfx(n) { const p = this.player, w = this.world; if (w && p) w.sound(n, p.wx + p.w / 2, p.wy + p.h / 2); }
+  // nave onde o personagem está agora (a própria, uma abandonada) ou null no espaço
+  get here() { return this.player ? this.player.ship : null; }
+  // roda fn como se a nave atual fosse s (usado dentro de naves abandonadas)
+  withShip(s, fn) {
+    const home = this.ship;
+    if (s === home) return fn();
+    this.ship = s;
+    try { return fn(); } finally { this.ship = home; }
+  }
   isCaptain() { const r = this.ship && this.uni.records[this.ship.key]; return !!r && r.owner === this.token; }
   key(k) { return (this.keys & KEYBIT[k]) !== 0; }
 
@@ -47,9 +58,18 @@ class Session {
     this.aim = +m.a || 0;
     if (m.sel >= 0 && m.sel < 10 && m.sel !== p.sel) { p.sel = m.sel | 0; this.wrench = null; }
     if (p.mode === 'walk' && m.tp === p.tp) {
-      // posição vem do cliente (validada contra a grade da nave)
-      const x = clamp(+m.x || 0, TS, s.pw - TS - p.w), y = clamp(+m.y || 0, TS, s.ph - TS - p.h);
-      if (!this.overlapsSolid(x, y)) { p.x = x; p.y = y; }
+      if (!p.ship) {
+        // no espaço: coordenadas do mundo; não entra na rocha nem passa do comprimento da corda
+        const w = this.world, x = +m.x || 0, y = +m.y || 0;
+        const a = this.tetherAnchor();
+        const okRope = !a || dist(x + p.w / 2, y + p.h / 2, a.x, a.y) <= EVA.tether + 40;
+        if (w && !w.rectHitsTerrain(x, y, p.w, p.h) && okRope) { p.x = x; p.y = y; }
+      } else {
+        // posição vem do cliente (validada contra a grade da nave em que ele está)
+        const h = p.ship;
+        const x = clamp(+m.x || 0, TS, h.pw - TS - p.w), y = clamp(+m.y || 0, TS, h.ph - TS - p.h);
+        if (!this.overlapsSolid(x, y)) { p.x = x; p.y = y; }
+      }
       p.vx = +m.vx || 0; p.vy = +m.vy || 0;
       p.facing = m.f < 0 ? -1 : 1; p.onGround = !!m.og; p.onLadder = !!m.ol;
       p.walkAnim = +m.wa || 0; p.jetting = !!m.jet;
@@ -59,14 +79,19 @@ class Session {
   overlapsSolid(x, y) {
     // mesma regra da física do personagem (rampas pelo centro dos pés), com 1px de folga
     const p = this.player;
-    return this.ship.boxHits(x + 1, y + 1, p.w - 2, p.h - 2, false, 'center');
+    return (p.ship || this.ship).boxHits(x + 1, y + 1, p.w - 2, p.h - 2, false, 'center');
   }
 
   handle(m) {
     if (!this.player || !this.ship) return;
     switch (m.t) {
       case 'in': this.onInput(m); break;
-      case 'click': if (this.player.mode === 'walk') { this.placeCode = clamp(m.shp | 0, 0, 63); this.placeShape = Math.min(this.placeCode, SHAPES.length - 1); this.primaryClick(+m.lx, +m.ly, !!m.sh); } break;
+      case 'click':
+        if (this.player.mode !== 'walk') break;
+        this.placeCode = clamp(m.shp | 0, 0, 63); this.placeShape = Math.min(this.placeCode, SHAPES.length - 1);
+        if (!this.here) this.spaceClick(+m.wx || 0, +m.wy || 0);
+        else this.withShip(this.here, () => this.primaryClick(+m.lx, +m.ly, !!m.sh));
+        break;
       case 'key': this.onKey(m.c, !!m.sh); break;
       case 'inv': this.invMove(m); break;
       case 'throw': this.throwFrom(m); break;
@@ -99,6 +124,7 @@ class Session {
       }
       return;
     }
+    if (c === 'KeyT') { this.toggleTether(); return; }
     if (c === 'KeyQ') this.dropHeld(shift);
     if (c === 'KeyR') {
       const h = p.held;
@@ -113,6 +139,24 @@ class Session {
   tick(dt) {
     const p = this.player, s = this.ship, w = this.world;
     if (!p || !s || !w) return;
+    this.evaTick(dt);
+    if (!this.player || this.player !== p) return;   // morreu e renasceu neste quadro
+    if (p.ship !== s) {
+      // fora da própria nave (espaço ou nave abandonada): só a chave inglesa funciona aqui
+      if (this.ui) { this.ui = null; this.send({ t: 'ui', op: 'close' }); }
+      if (!p.ship) { this.wrench = null; return; }
+      const wr = this.wrench;
+      if (wr) {
+        wr.age += dt;
+        if (this.mouse.left || wr.age < 0.06) this.withShip(p.ship, () => this.updateWrench(dt, this.mouse.lx, this.mouse.ly));
+        else {
+          const pend = wr.pend;
+          this.wrench = null;
+          if (pend && wr.age < 0.35 && p.ship.objects.includes(pend)) this.withShip(p.ship, () => this.interact(pend));
+        }
+      }
+      return;
+    }
     if (p.mode === 'walk') {
       const w = this.wrench;
       if (w) {
@@ -179,6 +223,226 @@ class Session {
     p.mode = 'walk'; p.ctrl = null;
   }
 
+  // ---------- fora da nave (EVA) ----------
+  // ponto onde a corda está presa (porta de uma escotilha da própria nave), ou null
+  tetherAnchor() {
+    const p = this.player;
+    if (!p || !p.tether || !this.ship) return null;
+    const o = this.ship.objects.find((x) => x.id === p.tether.oid && x.type === 'airlock');
+    return o ? this.ship.airlockDoor(o) : null;
+  }
+
+  // oxigênio, combustível, vida, corda, coleta de caixas e broca
+  evaTick(dt) {
+    const p = this.player, home = this.ship, w = this.world;
+    // pistola laser: esfria sempre; superaquecida só volta quando esfriar tudo
+    p.heat = p.heat || 0; p.laserT = Math.max(0, (p.laserT || 0) - dt);
+    if (p.overheat) { p.heat = Math.max(0, p.heat - LASER.overCool * dt); if (p.heat <= 0) p.overheat = false; }
+    const lh = p.held;
+    if (p.mode === 'walk' && lh && lh.item === 'laser_gun' && this.mouse.left && p.ship !== home) {
+      if (!p.overheat && p.laserT <= 0) {
+        p.laserT = LASER.rof;
+        this.fireLaser();
+        p.heat = Math.min(1, p.heat + LASER.heat);
+        if (p.heat >= 1) { p.overheat = true; this.sfxMe('error'); }
+      }
+    } else if (!p.overheat) p.heat = Math.max(0, p.heat - LASER.cool * dt);
+    if (p.ship === home) {
+      // em casa: recupera tudo e recolhe a corda
+      p.o2 = Math.min(1, p.o2 + dt * 0.6); p.fuel = Math.min(1, p.fuel + dt * 0.4); p.hp = Math.min(EVA.hp, p.hp + dt * 6);
+      p.tether = null; this.lowO2 = false;
+      return;
+    }
+    let anchor = this.tetherAnchor();
+    if (p.tether && !anchor) {
+      // a escotilha da corda sumiu
+      p.tether = null;
+      this.notify('A escotilha onde a corda estava presa sumiu: a corda se soltou!', '#ffb070');
+    } else if (anchor && dist(p.wx + p.w / 2, p.wy + p.h / 2, anchor.x, anchor.y) > EVA.tether * 1.6) {
+      p.tether = null; anchor = null;
+      this.notify('A corda arrebentou: a nave ficou longe demais!', '#ff8a6a');
+      this.sfxMe('error');
+    }
+    if (anchor) {
+      // preso à nave: ar e combustível vêm pela corda
+      p.o2 = Math.min(1, p.o2 + dt * 0.6); p.fuel = Math.min(1, p.fuel + dt * 0.6);
+    } else {
+      p.o2 = Math.max(0, p.o2 - dt / EVA.o2);
+      // o cliente prevê o gasto do jato; aqui conta só o que foi pedido
+      if (!p.ship && (this.keys & 15) && p.mode === 'walk') p.fuel = Math.max(0, p.fuel - dt / EVA.fuel);
+    }
+    if (p.o2 < 0.25 && !this.lowO2) { this.lowO2 = true; this.notify('Oxigênio acabando! Volte para a nave.', '#ff8a6a'); this.sfxMe('error'); }
+    if (p.o2 > 0.3) this.lowO2 = false;
+    if (p.o2 <= 0) p.hp -= EVA.suffocate * dt;
+    if (!p.ship) {
+      // pega caixas de saque encostando nelas
+      const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+      for (const c of w.crates) {
+        if (c.dead || dist(cx, cy, c.x, c.y) > c.r + 12) continue;
+        let got = false;
+        c.items = c.items.filter(([item, n], k) => {
+          const rest = invAdd(p.inv, item, n);
+          if (rest < n) got = true;
+          if (rest > 0) { c.items[k][1] = rest; return true; }
+          return false;
+        });
+        if (!c.items.length) c.dead = true;
+        if (got) this.sfxMe('collect');
+        else if (!this.fullT || w.time - this.fullT > 3) { this.fullT = w.time; this.notify('Inventário cheio.', '#ffb070'); }
+      }
+    }
+    if (w.crates.some((c) => c.dead)) w.crates = w.crates.filter((c) => !c.dead);   // caixa esvaziada sai na hora
+    // broca: segurando o clique (aplica em pulsos para não encher a rede de faíscas)
+    const h = p.held;
+    if (p.mode === 'walk' && h && h.item === 'drill' && this.mouse.left) {
+      this.drillT += dt;
+      if (this.drillT >= 0.15) { this.useDrill(this.drillT); this.drillT = 0; }
+    } else this.drillT = 0;
+    if (p.hp <= 0) this.dieOutside();
+  }
+
+  useDrill(t) {
+    const p = this.player, w = this.world;
+    if (!p.ship) {
+      const mx = this.mouse.x, my = this.mouse.y;
+      const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+      const tx = Math.floor(mx / WTS), ty = Math.floor(my / WTS);
+      const tt = w.getW(tx, ty);
+      if (tt === W.EMPTY) return;
+      // distância do personagem até a borda do bloco
+      const nx = clamp(cx, tx * WTS, (tx + 1) * WTS), ny = clamp(cy, ty * WTS, (ty + 1) * WTS);
+      if (dist(cx, cy, nx, ny) > EVA.drillRange) { if (!this.farT || w.time - this.farT > 2) { this.farT = w.time; this.notify('Chegue mais perto da rocha para minerar.', '#aaa'); } return; }
+      if (tt === W.WALL) { w.spark(nx, ny, '#888', 2); return; }
+      w.damageTerrain(tx, ty, EVA.drill * t, nx + (cx - nx) * 0.1, ny + (cy - ny) * 0.1);
+      w.sound('drill', nx, ny);
+    }
+  }
+
+  // pistola laser: no espaço dispara um projétil (não quebra o mapa);
+  // dentro de uma nave abandonada é um raio curto que acerta os drones
+  fireLaser() {
+    const p = this.player, w = this.world, home = this.ship;
+    if (!p.ship) {
+      const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+      const a = Math.atan2(this.mouse.y - cy, this.mouse.x - cx);
+      w.fireBullet(cx + Math.cos(a) * 9, cy + Math.sin(a) * 9, a, 'laser', 'player', home.id);
+      w.sound('laser', cx, cy);
+      return;
+    }
+    const s = p.ship, cx = p.cxL, cy = p.cyL;
+    const a = Math.atan2(this.mouse.ly - cy, this.mouse.lx - cx);
+    const dx = Math.cos(a), dy = Math.sin(a);
+    let ex = cx, ey = cy, hit = null;
+    for (let d = 6; d <= LASER.range; d += 2) {
+      const x = cx + dx * d, y = cy + dy * d;
+      ex = x; ey = y;
+      hit = (s.drones || []).find((q) => Math.abs(x - (q.x + 5)) < 6 && Math.abs(y - (q.y + 5)) < 6);
+      if (hit || s.solidForItem(Math.floor(x / TS), Math.floor(y / TS))) break;
+    }
+    w.laserFx(s.x + cx + dx * 6, s.y + cy + dy * 6, s.x + ex, s.y + ey);
+    w.sound('laser', s.x + cx, s.y + cy);
+    if (hit) w.hitDrone(s, hit, AMMO.laser.dmg);
+  }
+
+  // morreu fora da nave: os itens ficam numa caixa no lugar e ele renasce em casa
+  dieOutside() {
+    const p = this.player, w = this.world, home = this.ship;
+    const items = p.inv.filter(Boolean).map((st) => [st.item, st.n]);
+    if (items.length) w.crates.push({ id: uid(), x: p.wx + p.w / 2, y: p.wy + p.h / 2, vx: 0, vy: 0, items, r: 11, age: 0, spin: 0.5, rot: 0 });
+    p.inv = new Array(10).fill(null);
+    p.ship = home; p.tether = null;
+    p.hp = EVA.hp; p.o2 = 1; p.fuel = 1; p.vx = 0; p.vy = 0;
+    p.respawn();
+    this.wrench = null; this.lowO2 = false;
+    this.notify(items.length ? 'Você morreu fora da nave. Seus itens ficaram numa caixa no lugar onde você caiu.' : 'Você morreu fora da nave.', '#ff7070');
+    this.uni.shipMsg(home, `${this.name} morreu fora da nave.`, '#ff9a7a', this);
+    this.sfxMe('error');
+  }
+
+  // sair pela escotilha de tripulação (da própria nave ou de uma abandonada)
+  exitAirlock(o) {
+    const p = this.player, s = this.ship, w = this.world;
+    const door = s.airlockDoor(o);
+    const x = door.side < 0 ? door.x - p.w - 2 : door.x + 2, y = door.y - p.h / 2;
+    if (w.rectHitsTerrain(x, y, p.w, p.h)) { this.notify('Tem rocha encostada do lado de fora da escotilha.', '#ffb070'); this.sfxMe('error'); return; }
+    p.ship = null;
+    p.x = x; p.y = y; p.vx = door.side * 50 + s.vx; p.vy = s.vy; p.tp++;
+    p.onGround = false; p.onLadder = false;
+    this.wrench = null;
+    if (s.team === 'player') {   // saindo da própria nave (de uma abandonada, a corda continua como estava)
+      p.tether = this.tetherPref ? { sid: s.id, oid: o.id } : null;
+      if (!this.evaHelp) {
+        this.evaHelp = true;
+        this.notify('No espaço: WASD usa o jato • T prende/solta a corda • clique numa escotilha para entrar • Broca de Mão minera rochas • Pistola Laser atira.', '#9fe0ff');
+      }
+      this.notify(p.tether ? 'Saiu com a corda presa (ar e jato à vontade).' : 'Saiu SEM corda: oxigênio e combustível acabam!', p.tether ? '#9fe0ff' : '#ffb070');
+    }
+    w.sound('door', door.x, door.y);
+  }
+
+  // entrar por uma escotilha vista de fora
+  enterAirlock(s, o) {
+    const p = this.player, home = this.ship;
+    p.ship = s;
+    p.x = o.x * TS + (TS - p.w) / 2; p.y = (o.y + 2) * TS - p.h - 0.1;
+    p.vx = 0; p.vy = 0; p.tp++;
+    if (s === home) p.tether = null;
+    else if (!s.visited) {
+      s.visited = true;
+      this.notify(`Você entrou em "${s.name}". Sem ar aqui dentro${p.tether ? ' (a corda te mantém)' : ''}. Cuidado com os drones (a Pistola Laser resolve)!`, '#d0ffa0');
+    }
+    this.world.sound('door', s.x + p.cxL, s.y + p.cyL);
+  }
+
+  spaceClick(wx, wy) {
+    const p = this.player, w = this.world;
+    this.mouse.x = wx; this.mouse.y = wy;
+    const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+    // escotilha de tripulação (porta do lado de fora)
+    for (const s of w.ships) {
+      if (s.team !== 'player' && s.team !== 'derelict') continue;
+      for (const o of s.objects) {
+        if (o.type !== 'airlock') continue;
+        const d = s.airlockDoor(o);
+        if (Math.abs(wx - (d.x + d.side * 6)) > 14 || Math.abs(wy - d.y) > 20) continue;
+        if (s.team === 'player' && s !== this.ship) { this.notify('Só dá para entrar na sua nave ou em naves abandonadas.', '#ffb070'); this.sfxMe('error'); return; }
+        if (dist(cx, cy, d.x, d.y) > 46) { this.notify('Chegue mais perto da escotilha.', '#aaa'); return; }
+        this.enterAirlock(s, o);
+        return;
+      }
+    }
+  }
+
+  toggleTether() {
+    const p = this.player;
+    if (p.ship === this.ship) {
+      this.tetherPref = !this.tetherPref;
+      this.notify(this.tetherPref ? 'Corda: LIGADA ao sair (ar e jato sem limite, alcance limitado).' : 'Corda: DESLIGADA ao sair (vai longe, mas oxigênio e combustível acabam).', '#cfe');
+      this.sfx('click');
+      return;
+    }
+    if (p.tether) { p.tether = null; this.notify('Corda solta. Fique de olho no oxigênio!', '#ffb070'); this.sfx('click'); return; }
+    // prende de novo na escotilha mais perto, se alcançar
+    let best = null, bd = EVA.tether;
+    for (const o of this.ship.objectsOf('airlock')) {
+      const d = this.ship.airlockDoor(o), dd = dist(p.wx + p.w / 2, p.wy + p.h / 2, d.x, d.y);
+      if (dd < bd) { bd = dd; best = o; }
+    }
+    if (!best) { this.notify('Longe demais da sua nave para prender a corda.', '#ffb070'); this.sfxMe('error'); return; }
+    p.tether = { sid: this.ship.id, oid: best.id };
+    this.notify('Corda presa.', '#9fe0ff'); this.sfx('click');
+  }
+
+  // solta um item: no espaço vira uma caixa flutuando
+  spawnDrop(item, n, a, speed, vx0 = 0) {
+    const p = this.player, w = this.world;
+    if (!p.ship) {
+      w.crates.push({ id: uid(), x: p.x + p.w / 2 + Math.cos(a) * 26, y: p.y + p.h / 2 + Math.sin(a) * 26, vx: Math.cos(a) * speed * 0.5 + p.vx, vy: Math.sin(a) * speed * 0.5 + p.vy, items: [[item, n]], r: 11, age: 0, spin: rand(-2, 2), rot: 0 });
+      return;
+    }
+    p.ship.spawnItem(item, n, p.cxL + Math.cos(a) * 6, p.cyL - 2, Math.cos(a) * speed + vx0, Math.sin(a) * speed - 60);
+  }
+
   // ---------- auxiliares ----------
   inReach(lx, ly) { const p = this.player; return dist(p.cxL, p.cyL, lx, ly) <= REACH + 4; }
 
@@ -190,9 +454,8 @@ class Session {
       // não deixa construir em cima de alguém (só a parte que o formato ocupa)
       const [a0, a1, t0, t1, b0, b1] = SHAPES[shape].p;
       const bx = cx * TS + a0 * TS, bw = (a1 - a0) * TS, by = cy * TS + Math.min(t0, t1) * TS, bh = (Math.max(b0, b1) - Math.min(t0, t1)) * TS;
-      for (const c of s.crew) {
-        const p = c.player;
-        if (p && aabbOverlap(p.x, p.y, p.w, p.h, bx, by, bw, bh)) return false;
+      for (const p of s.world.occupants(s)) {
+        if (aabbOverlap(p.x, p.y, p.w, p.h, bx, by, bw, bh)) return false;
       }
     }
     return true;
@@ -254,6 +517,26 @@ class Session {
       if (h || obj || turret || item) { this.notify('Muito longe.', '#aaa'); this.sfxMe('error'); }
       return;
     }
+    if (s.team === 'derelict') {
+      // nave abandonada: dá para pegar itens, abrir caixas, desmontar (sucata) e sair; não dá para construir nem pilotar
+      const useful = obj && (obj.type === 'expando' || obj.type === 'airlock' || obj.type === 'door');
+      if (item && !(d && d.tool === 'shredder')) { /* pega abaixo */ }
+      else if (d && (d.tool === 'wrench' || d.tool === 'shredder')) { /* desmonta / tritura abaixo */ }
+      else if (useful) {
+        if (obj.type === 'expando') { this.expandoClick(obj, ly, shift, !!h && !(d && d.tool === 'drill')); return; }
+        this.interact(obj); return;
+      } else if (turret || obj) { this.notify('Isso não funciona numa nave abandonada.', '#aaa'); return; }
+      else if (d && (d.tool === 'drill' || d.tool === 'laser')) return;   // segurar o clique
+      else if (d && (d.kind === 'tile' || d.kind === 'object' || d.kind === 'turret' || d.tool)) { this.notify('Não dá para construir ou usar isso numa nave abandonada.', '#aaa'); return; }
+    }
+    if (d && d.tool === 'laser' && !item && !obj && !turret) {
+      if (s.team !== 'derelict') this.notify('A Pistola Laser só funciona fora da nave (espaço e naves abandonadas).', '#aaa');
+      return;
+    }
+    if (d && d.tool === 'drill' && !item) {
+      if (!obj && !turret) this.notify('A Broca de Mão funciona fora da nave, nas rochas do mapa.', '#aaa');
+      if (!obj && !turret) return;
+    }
     if (d && d.tool === 'shredder') {
       if (item) {
         s.items.splice(s.items.indexOf(item), 1);
@@ -274,7 +557,10 @@ class Session {
     // ampliador/encolhedor: agem na coluna/linha clicada, mesmo em cima de construções
     if (d && (d.tool === 'embiggener' || d.tool === 'shrinker')) { this.resizeShip(d.tool === 'embiggener' ? 1 : -1, lx, ly); return; }
 
-    if (d && turret && d.kind === 'ammo') { this.loadTurret(turret, h, shift); return; }
+    if (d && turret && d.kind === 'ammo') {
+      if (TURRETS[turret.type].mining) { this.notify('A Torreta Mineradora não usa munição.', '#aaa'); return; }
+      this.loadTurret(turret, h, shift); return;
+    }
     if (d && obj) {
       const od = OBJECTS[obj.type];
       if (od.fab && FAB_MATS.includes(h.item)) { this.loadFab(obj, h); return; }
@@ -340,7 +626,7 @@ class Session {
       const od = OBJECTS[d.obj];
       const ox = cx - Math.floor((od.w - 1) / 2), oy = cy - (od.h - 1);
       // objetos sólidos (Carregador) não podem nascer em cima de alguém ou de itens
-      const blocked = od.solid && (s.crew.some((c) => c.player && aabbOverlap(c.player.x, c.player.y, c.player.w, c.player.h, ox * TS, oy * TS, od.w * TS, od.h * TS))
+      const blocked = od.solid && (s.world.occupants(s).some((q) => aabbOverlap(q.x, q.y, q.w, q.h, ox * TS, oy * TS, od.w * TS, od.h * TS))
         || s.items.some((it) => aabbOverlap(it.x, it.y, it.w, it.h, ox * TS, oy * TS, od.w * TS, od.h * TS)));
       if (blocked) { this.notify('Tem algo no caminho.', '#ffb070'); this.sfxMe('error'); return; }
       if (s.canPlaceObject(d.obj, ox, oy)) {
@@ -374,8 +660,15 @@ class Session {
   // insere (dir = 1) ou remove (dir = -1) a coluna/linha sob o mouse, no eixo escolhido com R
   resizeShip(dir, lx, ly) {
     const s = this.ship, axis = this.resizeAxis;
+    if (dir > 0) {
+      // aumentar só no Porto Livre, e só se a nave tiver espaço para crescer (senão ela entra nas pedras)
+      if (s.world.zoneId !== 'freeport') { this.notify('O Ampliador só funciona no Porto Livre.', '#ffb070'); this.sfxMe('error'); return; }
+      if (!s.world.rectFree(s.x, s.y, s.pw + (axis === 'x' ? TS : 0), s.ph + (axis === 'y' ? TS : 0))) {
+        this.notify('Sem espaço para a nave crescer aqui: afaste-se das paredes.', '#ffb070'); this.sfxMe('error'); return;
+      }
+    }
     const at = resizeTarget(s, axis, dir, lx, ly);
-    const people = s.crew.map((c) => c.player).filter((p) => p && p.mode === 'walk');
+    const people = s.world.occupants(s).filter((p) => p.mode === 'walk');
     const err = s.resizeAt(axis, dir, at, people);
     if (err) { this.notify(err, '#ffb070'); this.sfxMe('error'); return; }
     for (const p of people) p.tp++;   // reposiciona os tripulantes no cliente
@@ -424,6 +717,7 @@ class Session {
         break;
       }
       case 'door': o.open = !o.open; this.sfx('click'); break;
+      case 'airlock': this.exitAirlock(o); break;
       case 'hatch': this.openUI('hatch', o); break;
       case 'ammo_crate':
       case 'expando': this.expandoClick(o, this.mouse.ly, false, false); break;
@@ -501,7 +795,7 @@ class Session {
     if (!h) return;
     const n = one ? 1 : h.n;
     const a = this.aim || 0;
-    this.ship.spawnItem(h.item, n, p.cxL + Math.cos(a) * 6, p.cyL - 2, Math.cos(a) * 320 + p.vx, Math.sin(a) * 320 - 60);
+    this.spawnDrop(h.item, n, a, 320, p.vx);
     this.consumeHeld(n);
   }
 
@@ -513,7 +807,7 @@ class Session {
     const obj = s.objectAt(cx, cy);
     let key = null, need = 0;
     if (turret) { key = 't' + turret.id; need = 1.2; }
-    else if (obj) { key = 'o' + obj.id; need = 1.0; }
+    else if (obj && !(obj.type === 'airlock' && s.team === 'derelict')) { key = 'o' + obj.id; need = 1.0; }
     else if (s.isInterior(cx, cy) && s.get(cx, cy) !== T.EMPTY) { key = `c${cx},${cy}`; need = 0.25; }
     w.lx = lx; w.ly = ly;
     if (!key) { w.t = 0; return; }
@@ -592,7 +886,7 @@ class Session {
     const s = src[i], p = this.player;
     const n = clamp(m.n | 0, 1, s.n);
     const a = +m.a || 0;
-    this.ship.spawnItem(s.item, n, p.cxL, p.cyL - 2, Math.cos(a) * 300, Math.sin(a) * 300 - 60);
+    this.spawnDrop(s.item, n, a, 300);
     s.n -= n;
     if (s.n <= 0) { src[i] = null; if (m.c === 'inv') this.refillSlot(i, s.item); }
   }

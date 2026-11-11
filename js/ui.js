@@ -508,7 +508,7 @@ class UI {
     $('#txt-shield').textContent = `Escudo ${Math.ceil(s.shield)}/${s.maxShield}`;
     $('#txt-hull').textContent = `Casco ${Math.max(0, Math.ceil(s.integrity))}/${s.maxIntegrity}`;
     const cq = s.cargoN || 0;
-    $('#hud-info').innerHTML = `${s.w}×${s.h} • ${Math.round(Math.hypot(s.vx, s.vy))} u/s • tripulação ${s.crewNet ? s.crewNet.length : 1}${cq ? ` • carga na fila: ${cq}` : ''}<br>Código <b>${g.key}</b>${g.captain ? ' • você é o capitão' : ''}${g.isPublic ? ' • pública' : ''}`;
+    $('#hud-info').innerHTML = `${s.w}×${s.h} • ${Math.round(Math.hypot(s.vx, s.vy))} u/s • tripulação ${s.crewTotal || (s.crewNet ? s.crewNet.length : 1)}${cq ? ` • carga na fila: ${cq}` : ''}<br>Código <b>${g.key}</b>${g.captain ? ' • você é o capitão' : ''}${g.isPublic ? ' • pública' : ''}`;
     $('#hint').innerHTML = this.contextHint();
     if (this.fabOid) { if (!this.objById(this.fabOid)) this.closeAll(true); else this.refreshFab(); }
     if (this.storeOid) { if (!this.objById(this.storeOid)) this.closeAll(true); else this.renderStorage(); }
@@ -530,15 +530,35 @@ class UI {
     }
     if (p.mode === 'gunner' && p.ctrl) {
       const ts = gunneryTurrets(s, p.ctrl);
-      const ammo = ts.map((t) => `${t.ammo}/${TURRETS[t.type].cap}`).join(' • ');
+      const ammo = ts.map((t) => (TURRETS[t.type].mining ? '∞' : `${t.ammo}/${TURRETS[t.type].cap}`)).join(' • ');
       return `<b>Artilharia — ${GUN_SIDE_NAMES[p.ctrl.side]}</b> — ${ts.length ? `${ts.length} torreta${ts.length > 1 ? 's' : ''} (${ammo})` : 'nenhuma torreta comum nesse lado'} • Clique: atirar • R: trocar lado • Espaço/Esc: sair`;
     }
     if (p.mode === 'turret' && p.ctrl) {
       const t = p.ctrl;
+      if (TURRETS[t.type].mining) return `<b>${TURRETS[t.type].name}</b> — não usa munição, só quebra blocos do mapa • Clique: atirar • Espaço/Esc: sair`;
       return `<b>${TURRETS[t.type].name}</b> — munição ${t.ammo}/${TURRETS[t.type].cap}${t.ammoType ? ' (' + AMMO[t.ammoType].name + ')' : ''} • Clique: atirar • Q: descarregar • Espaço/Esc: sair`;
     }
-    const lx = g.mouseWorld.x - s.x, ly = g.mouseWorld.y - s.y;
+    if (g.inSpace) {
+      const h = p.held;
+      const rope = p.tether ? 'com corda (T solta)' : 'sem corda (T prende perto da nave)';
+      if (h && h.item === 'drill') return `<b>No espaço</b> — Broca: segure o clique numa rocha perto • WASD: jato • ${rope}`;
+      if (h && h.item === 'laser_gun') return `<b>No espaço</b> — Pistola Laser: segure o clique para atirar (esfria sozinha) • WASD: jato • ${rope}`;
+      return `<b>No espaço</b> — WASD: jato • clique numa escotilha para entrar • encoste nas caixas para pegar • ${rope}`;
+    }
+    const derelict = g.here && g.here.team === 'derelict';
+    const L = g.loc;
+    const lx = g.mouseWorld.x - L.x, ly = g.mouseWorld.y - L.y;
     const cx = Math.floor(lx / TS), cy = Math.floor(ly / TS);
+    if (derelict) {
+      const o = L.objectAt(cx, cy), it = g.itemUnder(lx, ly), h = p.held;
+      if (it) return `${ITEMS[it.item].name}${it.n > 1 ? ' ×' + it.n : ''} — clique para pegar`;
+      if (o && o.type === 'airlock') return 'Escotilha de Tripulação — clique para sair ao espaço';
+      if (o && o.type === 'expando') return 'Caixa Expansível — metade de baixo retira o conteúdo';
+      if (h && h.item === 'laser_gun') return '<b>Nave abandonada</b> — Pistola Laser: segure o clique nos drones (cuidado com o superaquecimento)';
+      if (h && h.item === 'drill') return '<b>Nave abandonada</b> — a Broca só serve nas rochas do mapa';
+      if (h && h.item === 'wrench') return '<b>Nave abandonada</b> — Chave inglesa: segure para desmontar e levar a sucata';
+      return '<b>Nave abandonada</b> — pegue o saque e saia pela escotilha • cuidado com os drones (use a Pistola Laser)';
+    }
     const t = s.turretAtHull(cx, cy) || g.turretNear(lx, ly);
     const o = s.objectAt(cx, cy);
     const it = g.itemUnder(lx, ly);
@@ -546,6 +566,7 @@ class UI {
     const hd = h ? ITEMS[h.item] : null;
     if (it) return `${ITEMS[it.item].name}${it.n > 1 ? ' ×' + it.n : ''} — clique para pegar`;
     const resizing = hd && (hd.tool === 'embiggener' || hd.tool === 'shrinker');   // o clique redimensiona, não usa o alvo
+    if (t && !resizing && TURRETS[t.type].mining) return `${TURRETS[t.type].name} (não usa munição) — clique para controlar`;
     if (t && !resizing) return `${TURRETS[t.type].name} (${t.ammo}/${TURRETS[t.type].cap}${t.ammoType ? ' ' + AMMO[t.ammoType].name : ''}) — ${hd && hd.kind === 'ammo' ? 'clique para carregar (Shift: tudo)' : TURRETS[t.type].rc ? 'disparada pelo leme' : 'clique para controlar'}`;
     if (o && !resizing) {
       const od = OBJECTS[o.type];
@@ -556,6 +577,7 @@ class UI {
       else if (o.type === 'recycler') a = h ? 'clique para reciclar o item na mão' : 'segure um item e clique';
       else if (o.type === 'ejector') a = h ? 'clique para ejetar o item na mão' : 'segure um item e clique';
       else if (o.type === 'door') a = o.open ? 'clique para fechar' : 'clique para abrir';
+      else if (o.type === 'airlock') a = `clique para sair ao espaço • corda ${g.tetherPref ? 'ligada' : 'desligada'} (T muda)`;
       else if (o.type === 'ammo_crate') a = 'metade de cima guarda munição, de baixo retira';
       else if (o.type === 'loader') a = `pega ${LOADER_ARROWS[o.din]} coloca ${LOADER_ARROWS[o.dout]} — clique para configurar`;
       else if (o.type === 'hatch') a = `${o.open ? 'aberta' : 'fechada'}${o.filter && o.filter.length ? (o.fmode === 'allow' ? ' • só itens do filtro' : ' • com itens barrados') : o.fmode === 'allow' ? ' • nada marcado no filtro' : ''} — clique para configurar`;
@@ -566,9 +588,12 @@ class UI {
     if (hd) {
       if (h.item === 'gunnery') return `Posto de Artilharia — clique para construir • lado: ${GUN_SIDE_NAMES[GUN_SIDES[g.gunSide]]} • R: escolher lado`;
       if (h.item === 'loader') return `Carregador — clique para construir • pega ${LOADER_ARROWS[g.loaderDirs.din]} coloca ${LOADER_ARROWS[g.loaderDirs.dout]} • R: direções`;
+      if (h.item === 'airlock') return 'Escotilha de Tripulação — construa encostada na parede esquerda ou direita, com piso embaixo';
       if (hd.kind === 'tile' || hd.kind === 'object') return `${hd.name} — clique para construir • Q: soltar`;
       if (hd.kind === 'turret') return `${hd.name} — clique no casco externo para instalar`;
       if (hd.tool === 'wrench') return 'Chave inglesa — segure o clique sobre blocos/objetos para desmontar';
+      if (hd.tool === 'drill') return 'Broca de Mão — funciona fora da nave: minera as rochas do mapa';
+      if (hd.tool === 'laser') return 'Pistola Laser — funciona fora da nave (espaço e naves abandonadas); superaquece se atirar sem parar';
       if (hd.tool === 'booster') return 'Reforço de Escudo — clique para recarregar +80 de escudo';
       if (hd.tool === 'repair') return 'Kit de Reparo — clique para restaurar +60 do casco';
       if (hd.tool === 'embiggener' || hd.tool === 'shrinker') {

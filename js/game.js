@@ -6,6 +6,7 @@
 'use strict';
 
 const INPUT_RATE = 1 / 30;
+const SPACE_BASE = { x: 0, y: 0 };   // referência da câmera no espaço
 
 class Game {
   constructor() {
@@ -31,6 +32,7 @@ class Game {
     this.transport = null;
     this.ships = new Map();
     this.ship = null;
+    this.here = null;          // nave onde o personagem está (a própria ou uma abandonada); null no espaço
     this.player = null;
     this.pid = null; this.sid = null; this.key = null;
     this.captain = false;
@@ -47,7 +49,17 @@ class Game {
     requestAnimationFrame((t) => this.frame(t));
   }
 
-  get running() { return this.state === 'play' && !!this.ship && !!this.player; }
+  get running() { return this.state === 'play' && !!this.ship && !!this.player && !this.locMissing; }
+  get inSpace() { return this.running && !this.here; }
+  // nave usada para as coordenadas locais do mouse (onde o personagem está; no espaço, a própria)
+  get loc() { return this.here || this.ship; }
+  // ponto da corda (porta da escotilha presa), calculado com a posição suavizada da nave
+  tetherPoint() {
+    const p = this.player, s = this.ship;
+    if (!p || !p.tether || !s) return null;
+    const o = s.objects.find((x) => x.id === p.tether && x.type === 'airlock');
+    return o ? s.airlockDoor(o) : null;
+  }
 
   // ---------- conexão ----------
   connect(kind, addr) {
@@ -174,7 +186,12 @@ class Game {
             get cxL() { return this.x + 5; }, get cyL() { return this.y + 11; },
           };
         });
-        s.cargoN = d[15]; s.key = d[16];
+        s.cargoN = d[15]; s.key = d[16]; s.crewTotal = d[19] ?? s.crewNet.length;
+        const pdr = new Map((s.drones || []).map((q) => [q.id, q]));
+        s.drones = (d[18] || []).map(([id, x, y, vx, vy, hp, flash]) => {
+          const q = pdr.get(id);
+          return { id, tx: x, ty: y, x: q ? q.x : x, y: q ? q.y : y, vx, vy, hp, flash };
+        });
         const pcart = new Map((s.carts || []).map((c) => [c.id, c]));
         s.carts = (d[17] || []).map(([id, x, y, item, n, dir]) => {
           const p = pcart.get(id);
@@ -199,6 +216,16 @@ class Game {
       return { id, sx: x, sy: y, x: p ? p.x : x, y: p ? p.y : y, vx, vy, rt: now, rot, items: [[item, 1]], rare: !!rare };
     });
     w.bullets = m.bu.map(([x, y, vx, vy, ammo, r]) => ({ x, y, vx, vy, ammo, r }));
+    // tripulantes no espaço
+    const pev = new Map((w.eva || []).map((e) => [e.id, e]));
+    w.eva = (m.ev || []).map(([id, name, x, y, f, held, jet, aim, anc, jd, vx, vy]) => {
+      const e = pev.get(id);
+      return {
+        id, name, tx: x, ty: y, x: e ? e.x : x, y: e ? e.y : y, w: 10, h: 22, facing: f, held: held ? { item: held, n: 1 } : null,
+        jetting: !!jet, aim, anchor: anc ? { x: anc[0], y: anc[1] } : null, jetDir: jd, vx, vy, walkAnim: 0, mode: 'walk', equip: { feet: null, back: null },
+        get cxL() { return this.x + 5; }, get cyL() { return this.y + 11; },
+      };
+    });
     if (m.tc.length) { w.applyTileChanges(m.tc); this.renderer.terrainDirty = true; }
     w.playFx(m.fx);
 
@@ -212,7 +239,19 @@ class Game {
       this.player.tp = -1;
     }
     const p = this.player;
-    p.ship = this.ship;
+    // onde o personagem está
+    this.locMissing = false;
+    if (me.loc === 'h') this.here = this.ship;
+    else if (me.loc === 's') this.here = null;
+    else { this.here = this.ships.get(me.loc) || null; if (!this.here) this.locMissing = true; }
+    const moved = this.locKey !== me.loc;
+    this.locKey = me.loc;
+    p.ship = this.here;
+    p.heat = me.heat || 0; p.overheat = !!me.ovh;
+    p.hp = me.hp; p.o2 = me.o2; p.tether = me.teth || null; this.tetherPref = !!me.tpf;
+    // o combustível é previsto aqui; a correção do servidor entra aos poucos (sem pulos na barra)
+    p.fuel = moved || Math.abs(p.fuel - me.fu) > 0.08 ? me.fu : p.fuel + (me.fu - p.fuel) * 0.3;
+    if (moved) { this.wrench = null; this.closeShapeWheel(false); this.ui.closeAll(true); }
     if (me.inv) { p.inv = me.inv; this.ui.renderInv(); }
     if (me.eq) { p.equip = me.eq; this.ui.renderEquip(); }
     const modeChanged = p.mode !== me.mode;
@@ -317,7 +356,7 @@ class Game {
     }
     if (c === 'KeyI') { this.ui.toggleEquip(); return; }
     if (c === 'KeyM') { this.ui.toggleBigMap(); return; }
-    if (c === 'KeyQ' || c === 'KeyR' || (c === 'Space' && p.mode !== 'walk')) this.send({ t: 'key', c, sh: e.shiftKey });
+    if (c === 'KeyQ' || c === 'KeyR' || c === 'KeyT' || (c === 'Space' && p.mode !== 'walk')) this.send({ t: 'key', c, sh: e.shiftKey });
   }
 
   // ---------- laço ----------
@@ -362,6 +401,7 @@ class Game {
       for (const t of s.turrets) if (t.netAngle !== undefined && !t.predicted) t.angle += angDiff(t.angle, t.netAngle) * Math.min(1, dt * 15);
     }
     for (const b of w.bots) this.smooth(b, dt);
+    for (const e of w.eva || []) { e.tx += (e.vx || 0) * dt; e.ty += (e.vy || 0) * dt; e.x += (e.tx - e.x) * Math.min(1, dt * 12); e.y += (e.ty - e.y) * Math.min(1, dt * 12); e.walkAnim += dt * 2; }
     for (const c of w.crates) { this.smooth(c, dt, 6); }
     for (const b of w.bullets) { b.x += b.vx * dt; b.y += b.vy * dt; }
     w.updateParticles(dt);
@@ -375,9 +415,18 @@ class Game {
         jump: !typing && !!this.keys.Space, jumpPressed: !typing && !!this.pressed.Space,
         downPressed: !typing && !!(this.pressed.KeyS || this.pressed.ArrowDown),
       };
-      const lx = this.mouseWorld.x - s.x, ly = this.mouseWorld.y - s.y;
-      this.aimAngle = Math.atan2(ly - p.cyL, lx - p.cxL);
-      if (p.mode === 'walk') {
+      const L = this.loc;
+      const lx = this.mouseWorld.x - L.x, ly = this.mouseWorld.y - L.y;
+      this.aimAngle = this.inSpace ? Math.atan2(this.mouseWorld.y - (p.y + p.h / 2), this.mouseWorld.x - (p.x + p.w / 2)) : Math.atan2(ly - p.cyL, lx - p.cxL);
+      if (p.mode === 'walk' && this.inSpace) {
+        // no espaço: jato com inércia (as naves são sólidas por fora)
+        const was = p.jetting;
+        p.updateSpace(dt, input, w, w.ships, this.tetherPoint());
+        if (p.jetting && !was && p.fuel > 0) this.sfx('jump');
+        if (this.mouse.leftPressed && !this.ui.mouseOverUI) {
+          this.send({ t: 'click', lx: 0, ly: 0, wx: r1(this.mouseWorld.x), wy: r1(this.mouseWorld.y), sh: !!(this.keys.ShiftLeft || this.keys.ShiftRight), shp: 0 });
+        }
+      } else if (p.mode === 'walk') {
         const wasGround = p.onGround, py0 = p.y, px0 = p.x;
         p.update(dt, input);
         // degrau pequeno de fim de rampa: o desenho acompanha suavemente
@@ -391,6 +440,7 @@ class Game {
           this.send({ t: 'click', lx: r1(lx), ly: r1(ly), sh: !!(this.keys.ShiftLeft || this.keys.ShiftRight), shp: h ? this.shapeFor(h.item) : 0 });
         }
       }
+      for (const sh of w.ships) for (const q of sh.drones || []) { q.x += (q.tx - q.x) * Math.min(1, dt * 12); q.y += (q.ty - q.y) * Math.min(1, dt * 12); }
       // predição visual da mira das torretas
       for (const t of s.turrets) t.predicted = false;
       const aimT = (t) => {
@@ -423,7 +473,10 @@ class Game {
     let tx, ty;
     if (this.running) {
       c.targetZoom = p.mode === 'walk' ? this.zoomWalk : this.zoomFly;
-      if (p.mode === 'walk') { tx = s.x + p.cxL; ty = s.y + p.cyL; }
+      // base da câmera: a nave onde o personagem está (no espaço, o próprio mundo)
+      const base = p.mode === 'walk' ? (this.here || SPACE_BASE) : s;
+      if (this.camBase !== base) { if (c.ox !== undefined) { c.ox = c.x - base.x; c.oy = c.y - base.y; } this.camBase = base; }
+      if (p.mode === 'walk') { tx = p.wx + p.w / 2; ty = p.wy + p.h / 2; }
       else {
         const mx = this.mouseWorld.x - s.cx, my = this.mouseWorld.y - s.cy;
         tx = s.cx + clamp(mx, -600, 600) * 0.25; ty = s.cy + clamp(my, -400, 400) * 0.25;
@@ -431,9 +484,9 @@ class Game {
       }
       // segue a nave sem atraso; suaviza só o deslocamento interno
       const k = Math.min(1, dt * 10);
-      c.ox = (c.ox === undefined ? tx - s.x : c.ox) + ((tx - s.x) - (c.ox === undefined ? tx - s.x : c.ox)) * k;
-      c.oy = (c.oy === undefined ? ty - s.y : c.oy) + ((ty - s.y) - (c.oy === undefined ? ty - s.y : c.oy)) * k;
-      c.x = s.x + c.ox; c.y = s.y + c.oy;
+      c.ox = (c.ox === undefined ? tx - base.x : c.ox) + ((tx - base.x) - (c.ox === undefined ? tx - base.x : c.ox)) * k;
+      c.oy = (c.oy === undefined ? ty - base.y : c.oy) + ((ty - base.y) - (c.oy === undefined ? ty - base.y : c.oy)) * k;
+      c.x = base.x + c.ox; c.y = base.y + c.oy;
     } else {
       c.ox = undefined; c.oy = undefined;
       c.targetZoom = 0.5;
@@ -476,7 +529,8 @@ class Game {
   }
 
   canPlaceTile(cx, cy) {
-    const s = this.ship, p = this.player;
+    const s = this.loc, p = this.player;
+    if (s.team === 'derelict') return false;
     if (!s.isInterior(cx, cy)) return false;
     if (s.get(cx, cy) !== T.EMPTY || s.objectAt(cx, cy)) return false;
     const h = p.held;
@@ -488,14 +542,14 @@ class Game {
   }
   itemUnder(lx, ly) {
     let best = null, bd = 12;
-    for (const it of this.ship.items) {
+    for (const it of this.loc.items) {
       const d = dist(lx, ly, it.x + it.w / 2, it.y + it.h / 2);
       if (d < bd) { bd = d; best = it; }
     }
     return best;
   }
   turretNear(lx, ly) {
-    const s = this.ship;
+    const s = this.loc;
     for (const t of s.turrets) { const p = s.turretLocal(t); if (dist(lx, ly, p.x, p.y) < 14) return t; }
     return null;
   }

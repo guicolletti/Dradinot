@@ -183,6 +183,14 @@ class Universe {
 
   moveShip(ship, zoneId) {
     const old = ship.world;
+    // quem estava fora (no espaço ou numa nave abandonada) é puxado de volta antes do salto
+    for (const c of ship.crew) {
+      const p = c.player;
+      if (!p || p.ship === ship) continue;
+      p.ship = ship; p.tether = null; p.vx = 0; p.vy = 0;
+      p.respawn();
+      c.notify('A nave atravessou um portal: você foi puxado de volta para dentro.', '#9fe0ff');
+    }
     if (old) old.removeShip(ship);
     const w = this.world(zoneId);
     w.placeShipAtOpenSpot(ship);
@@ -265,16 +273,30 @@ class Universe {
   }
 
   worldSnap(w) {
-    const ships = w.ships.map((s) => this.shipDyn(s));
+    // quem está dentro de cada nave (inclusive visitantes de naves abandonadas) e quem está no espaço
+    const occ = new Map(), eva = [];
+    for (const s of w.ships) if (s.team === 'player') for (const c of s.crew) {
+      const p = c.player;
+      if (!p) continue;
+      if (!p.ship) { eva.push(c); continue; }
+      if (!occ.has(p.ship)) occ.set(p.ship, []);
+      occ.get(p.ship).push(c);
+    }
+    const ships = w.ships.map((s) => this.shipDyn(s, occ.get(s) || []));
     const objs = new Map();
-    for (const s of w.ships) if (s.team === 'player') objs.set(s.id, JSON.stringify(s.objects.map((o) => this.objNet(o))));
+    for (const s of w.ships) if (s.team === 'player' || s.team === 'derelict') objs.set(s.id, JSON.stringify(s.objects.map((o) => this.objNet(o))));
     const tc = [];
     for (const i of w.dirtyTiles) tc.push([i, w.terrain[i], Math.round(w.thp[i])]);
     return {
       ships, objs, tc,
       bo: w.bots.map((b) => [b.id, b.type, r1(b.x), r1(b.y), r1(b.vx), r1(b.vy), r1(b.angle), Math.round(b.hp), b.maxHp, r1(b.flash), r1(b.rot)]),
       bu: w.bullets.map((b) => [r1(b.x), r1(b.y), r1(b.vx), r1(b.vy), b.ammo, b.r]),
-      cr: w.crates.map((c) => [c.id, r1(c.x), r1(c.y), r1(c.vx), r1(c.vy), r1(c.rot), c.items[0][0], c.items.some(([i]) => RARE_ITEMS.has(i)) ? 1 : 0]),
+      cr: w.crates.filter((c) => !c.dead && c.items.length).map((c) => [c.id, r1(c.x), r1(c.y), r1(c.vx), r1(c.vy), r1(c.rot), c.items[0][0], c.items.some(([i]) => RARE_ITEMS.has(i)) ? 1 : 0]),
+      // tripulantes no espaço: [id, nome, x, y, lado, item na mão, jato, mira, ponto da corda (ou 0), direção do jato]
+      ev: eva.map((c) => {
+        const p = c.player, a = c.tetherAnchor();
+        return [p.id, c.name, r1(p.x), r1(p.y), p.facing, p.held ? p.held.item : '', p.jetting ? 1 : 0, r1(c.aim || 0), a ? [r1(a.x), r1(a.y)] : 0, r1(p.jetDir || 0), r1(p.vx), r1(p.vy)];
+      }),
       fx: w.fx.slice(),
     };
   }
@@ -285,12 +307,12 @@ class Universe {
     return c;
   }
 
-  shipDyn(s) {
+  shipDyn(s, occ = []) {
     const dyn = [s.id, r1(s.x), r1(s.y), r1(s.vx), r1(s.vy), Math.round(s.shield), Math.round(s.integrity), s.maxShield, s.maxIntegrity,
       r1(s.hitFlash), r1(s.thrust.x), s.turrets.map((t) => [r1(t.angle), t.ammo, t.ammoType || '', r1(t.recoil || 0)]), s.rev];
-    if (s.team === 'player') {
+    if (s.team === 'player' || s.team === 'derelict') {
       dyn.push(s.items.map((it) => [it.id, it.item, it.n, r1(it.x), r1(it.y), r1(it.rot)]));
-      dyn.push(s.crew.filter((c) => c.player).map((c) => {
+      dyn.push(occ.map((c) => {
         const p = c.player;
         return [p.id, c.name, r1(p.x), r1(p.y), p.facing, p.onGround ? 1 : 0, r1(p.walkAnim || 0), p.mode, p.held ? p.held.item : '', p.equip.feet || '', p.equip.back || '', p.jetting ? 1 : 0, r1(c.aim || 0)];
       }));
@@ -298,6 +320,9 @@ class Universe {
       dyn.push(s.key);
       // carrinhos de munição: [caixa, x, y, item, quantidade, sentido]
       dyn.push(s.objects.filter((o) => o.cart).map((o) => [o.id, r1(o.cart.px), r1(o.cart.py), o.cart.item, o.cart.n, o.cart.dir || 1]));
+      // drones de vigia: [id, x, y, vx, vy, vida, piscada]
+      dyn.push((s.drones || []).map((d) => [d.id, r1(d.x), r1(d.y), r1(d.vx), r1(d.vy), Math.round(d.hp), r1(d.flash)]));
+      dyn.push(s.crew ? s.crew.length : 0);   // tripulação total (inclusive quem está fora)
     }
     return dyn;
   }
@@ -324,6 +349,11 @@ class Universe {
       ctrl: p.ctrl ? (p.mode === 'turret' ? { k: 't', i: sess.ship.turrets.indexOf(p.ctrl) } : { k: 'o', id: p.ctrl.id }) : null,
       wr: sess.wrench && sess.wrench.t > 0 ? [r1(sess.wrench.lx), r1(sess.wrench.ly), r1(sess.wrench.t), sess.wrench.need] : null,
       cap: this.records[sess.ship.key] ? this.records[sess.ship.key].owner === sess.token : false,
+      // onde está: 'h' (em casa), 's' (no espaço) ou o id da nave abandonada
+      loc: p.ship === sess.ship ? 'h' : !p.ship ? 's' : p.ship.id,
+      heat: Math.round((p.heat || 0) * 100) / 100, ovh: p.overheat ? 1 : 0,
+      hp: Math.round(p.hp), o2: Math.round(p.o2 * 1000) / 1000, fu: Math.round(p.fuel * 1000) / 1000,
+      teth: p.tether ? p.tether.oid : 0, tpf: sess.tetherPref ? 1 : 0,
       pub: this.records[sess.ship.key] ? !!this.records[sess.ship.key].public : false,
     };
     const inv = JSON.stringify(p.inv);
@@ -331,7 +361,7 @@ class Universe {
     const eq = JSON.stringify(p.equip);
     if (eq !== sess.lastEq) { me.eq = p.equip; sess.lastEq = eq; }
     sess.send({
-      t: 's', tm: r1(w.time), sh: base.ships, st, ob, bo: base.bo, bu: base.bu, cr: base.cr, fx: base.fx, tc: base.tc, me,
+      t: 's', tm: r1(w.time), sh: base.ships, st, ob, bo: base.bo, bu: base.bu, cr: base.cr, ev: base.ev, fx: base.fx, tc: base.tc, me,
     });
   }
 }

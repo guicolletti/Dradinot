@@ -58,7 +58,11 @@ class LocalTransport {
   update(dt) {
     this.acc += Math.min(dt, 0.1);
     let n = 0;
-    while (this.acc >= 1 / 60 && n < 6) { this.uni.tick(1 / 60); this.acc -= 1 / 60; n++; }
+    while (this.acc >= 1 / 60 && n < 6) {
+      // como no servidor online: um erro na simulação é registrado, mas não congela o jogo
+      try { this.uni.tick(1 / 60); } catch (e) { console.error('Erro na simulação:', e); }
+      this.acc -= 1 / 60; n++;
+    }
     const box = this.inbox; this.inbox = [];
     for (const s of box) this.onMsg(JSON.parse(s));
   }

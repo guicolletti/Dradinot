@@ -56,6 +56,9 @@ const SFX = {
       case 'portal': this.tone(200, 0.8, 'sine', 0.25 * v, 4); this.tone(300, 0.8, 'triangle', 0.15 * v, 3); break;
       case 'load': this.tone(400, 0.05, 'square', 0.08 * v); setTimeout(() => this.tone(600, 0.05, 'square', 0.08 * v), 50); break;
       case 'jump': this.tone(300, 0.08, 'triangle', 0.05 * v, 1.6); break;
+      case 'door': this.noise(0.35, 0.12 * v, 600); this.tone(180, 0.3, 'sine', 0.08 * v, 0.6); break;
+      case 'laser': this.tone(1500, 0.07, 'sawtooth', 0.05 * v, 0.35); break;
+      case 'drill': this.noise(0.12, 0.12 * v, 2200); this.tone(110, 0.1, 'sawtooth', 0.05 * v, 1.1); break;
       case 'error': this.tone(160, 0.15, 'square', 0.08 * v); break;
     }
   },
