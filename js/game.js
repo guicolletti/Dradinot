@@ -23,6 +23,10 @@ class Game {
     this.shakeAmt = 0;
     this.resizeAxis = 'x';
     this.wrench = null;
+    this.shapeSel = {};        // formato escolhido para cada item de construção (Bloco, Rede)
+    this.shapeWheel = null;    // roda de formatos aberta (segurando R)
+    this.loaderDirs = { din: 6, dout: 2 };
+    this.gunSide = 1;          // lado do próximo Posto de Artilharia (índice em GUN_SIDES; 1 = direita)   // direções do próximo Carregador (pega da esquerda, coloca à direita)
     this.state = 'title';      // title | menu | play | dead
     this.transport = null;
     this.ships = new Map();
@@ -110,6 +114,8 @@ class Game {
       case 'sfx': SFX.play(m.n, 1); break;
       case 'ui':
         if (m.op === 'fab') this.ui.openFab(m.oid);
+        else if (m.op === 'loader') this.ui.openLoader(m.oid);
+        else if (m.op === 'hatch') this.ui.openHatch(m.oid);
         else if (m.op === 'store') this.ui.openStorage(m.oid);
         else this.ui.closeAll(true);
         break;
@@ -169,6 +175,13 @@ class Game {
           };
         });
         s.cargoN = d[15]; s.key = d[16];
+        const pcart = new Map((s.carts || []).map((c) => [c.id, c]));
+        s.carts = (d[17] || []).map(([id, x, y, item, n, dir]) => {
+          const p = pcart.get(id);
+          // carrinho novo (ou que pulou para longe) aparece direto no lugar; senão desliza até a posição
+          const near = p && Math.abs(p.x - x) + Math.abs(p.y - y) < TS * 3;
+          return { id, item, n, dir, tx: x, ty: y, x: near ? p.x : x, y: near ? p.y : y };
+        });
       }
     }
     for (const s of this.ships.values()) if (!list.includes(s)) this.ships.delete(s.id);
@@ -255,7 +268,10 @@ class Game {
       if (['Space', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.code)) e.preventDefault();
       if (this.running) this.onKey(e);
     });
-    addEventListener('keyup', (e) => { this.keys[e.code] = false; });
+    addEventListener('keyup', (e) => {
+      this.keys[e.code] = false;
+      if (e.code === 'KeyR' && this.shapeWheel) this.closeShapeWheel(true);
+    });
     addEventListener('blur', () => { this.keys = {}; this.mouse.left = false; this.mouse.right = false; });
     const cv = this.canvas;
     addEventListener('mousemove', (e) => { this.mouse.x = e.clientX; this.mouse.y = e.clientY; });
@@ -284,11 +300,17 @@ class Game {
     if (c === 'Slash') { this.ui.openChat('/'); e.preventDefault(); return; }
     if (c === 'KeyH' || c === 'F1') { this.ui.toggleHelp(); e.preventDefault(); return; }
     if (c === 'Escape') {
+      if (this.shapeWheel) { this.closeShapeWheel(false); return; }
       if (this.ui.closeAll()) return;
       this.send({ t: 'key', c });
       return;
     }
+    if (c === 'KeyR' && p.mode === 'walk') {
+      if (e.repeat || this.shapeWheel) return;
+      if (this.openShapeWheel()) return;   // Bloco/Rede na mão: roda de formatos
+    }
     if (c.startsWith('Digit')) {
+      this.closeShapeWheel(false);
       const n = c === 'Digit0' ? 9 : parseInt(c.slice(5), 10) - 1;
       if (n >= 0 && n < 10) { p.sel = n; this.ui.renderInv(); }
       return;
@@ -319,9 +341,22 @@ class Game {
     this.shakeAmt = Math.max(0, this.shakeAmt - dt * 30);
     this.mouseWorld = this.renderer.toWorld(this.mouse.x, this.mouse.y);
     const w = this.world;
+    if (this.shapeWheel) {
+      const wh = this.shapeWheel, h = this.player && this.player.held;
+      if (!h || h.item !== wh.item || this.player.mode !== 'walk') this.closeShapeWheel(false);
+      else {
+        wh.hover = wh.kind === 'dir' ? dirWheelPick(this.mouse.x, this.mouse.y, wh.cx, wh.cy) : wh.kind === 'side' ? sideWheelPick(this.mouse.x, this.mouse.y, wh.cx, wh.cy) : shapeWheelPick(this.mouse.x, this.mouse.y, wh.cx, wh.cy);
+        if (this.mouse.leftPressed) {
+          // roda de direções: o clique escolhe e mantém aberta (dá para acertar entrada e saída); formatos: escolhe e fecha
+          if (wh.kind === 'dir') this.applyWheel(wh); else this.closeShapeWheel(true);
+          this.mouse.leftPressed = false; this.mouse.left = false;
+        }
+      }
+    }
     // suavização das entidades
     for (const s of w.ships) {
       this.smooth(s, dt);
+      for (const c of s.carts || []) { c.x += (c.tx - c.x) * Math.min(1, dt * 15); c.y += (c.ty - c.y) * Math.min(1, dt * 15); }
       for (const it of s.items) if (it.tx !== undefined) { it.x += (it.tx - it.x) * Math.min(1, dt * 15); it.y += (it.ty - it.y) * Math.min(1, dt * 15); }
       for (const c of s.crewNet || []) { c.x += (c.tx - c.x) * Math.min(1, dt * 15); c.y += (c.ty - c.y) * Math.min(1, dt * 15); }
       for (const t of s.turrets) if (t.netAngle !== undefined && !t.predicted) t.angle += angDiff(t.angle, t.netAngle) * Math.min(1, dt * 15);
@@ -343,10 +378,18 @@ class Game {
       const lx = this.mouseWorld.x - s.x, ly = this.mouseWorld.y - s.y;
       this.aimAngle = Math.atan2(ly - p.cyL, lx - p.cxL);
       if (p.mode === 'walk') {
-        const wasGround = p.onGround;
+        const wasGround = p.onGround, py0 = p.y, px0 = p.x;
         p.update(dt, input);
+        // degrau pequeno de fim de rampa: o desenho acompanha suavemente
+        const dyStep = p.y - py0;
+        if (wasGround && p.onGround && Math.abs(dyStep) > Math.abs(p.x - px0) + 0.5 && Math.abs(dyStep) < TS * 0.5) p.visOff = (p.visOff || 0) - dyStep;
+        p.visOff = (p.visOff || 0) * Math.exp(-dt * 18);
+        if (Math.abs(p.visOff) < 0.05) p.visOff = 0;
         if (input.jumpPressed && wasGround) this.sfx('jump');
-        if (this.mouse.leftPressed && !this.ui.mouseOverUI) this.send({ t: 'click', lx: r1(lx), ly: r1(ly), sh: !!(this.keys.ShiftLeft || this.keys.ShiftRight) });
+        if (this.mouse.leftPressed && !this.ui.mouseOverUI && !this.shapeWheel) {
+          const h = p.held;
+          this.send({ t: 'click', lx: r1(lx), ly: r1(ly), sh: !!(this.keys.ShiftLeft || this.keys.ShiftRight), shp: h ? this.shapeFor(h.item) : 0 });
+        }
       }
       // predição visual da mira das torretas
       for (const t of s.turrets) t.predicted = false;
@@ -357,6 +400,7 @@ class Game {
       };
       if (p.mode === 'helm') for (const t of s.turrets) { if (TURRETS[t.type].rc) aimT(t); }
       if (p.mode === 'turret' && p.ctrl) aimT(p.ctrl);
+      if (p.mode === 'gunner' && p.ctrl) for (const t of gunneryTurrets(s, p.ctrl)) aimT(t);
       // envia entrada
       this.inputT -= dt;
       if (this.inputT <= 0) {
@@ -365,7 +409,7 @@ class Game {
         this.send({
           t: 'in', tp: p.tp, x: r1(p.x), y: r1(p.y), vx: r1(p.vx), vy: r1(p.vy), f: p.facing, og: p.onGround ? 1 : 0, ol: p.onLadder ? 1 : 0,
           wa: r1(p.walkAnim), jet: p.jetting ? 1 : 0, k, mx: r1(this.mouseWorld.x), my: r1(this.mouseWorld.y), lx: r1(lx), ly: r1(ly),
-          ml: this.mouse.left && !this.ui.mouseOverUI ? 1 : 0, sel: p.sel, a: r1(this.aimAngle),
+          ml: this.mouse.left && !this.ui.mouseOverUI && !this.shapeWheel ? 1 : 0, sel: p.sel, a: r1(this.aimAngle),
         });
       }
     }
@@ -403,12 +447,43 @@ class Game {
 
   // ---------- auxiliares só de leitura (dicas e pré-visualização) ----------
   inReach(lx, ly) { const p = this.player; return dist(p.cxL, p.cyL, lx, ly) <= REACH; }
+  // ---------- formatos de bloco ----------
+  shapeFor(item) {
+    if (item === 'loader') return this.loaderDirs.din * 8 + this.loaderDirs.dout;   // vai no clique de construir
+    if (item === 'gunnery') return this.gunSide;
+    const d = ITEMS[item];
+    return d && d.kind === 'tile' && SHAPED_TILES.has(d.tile) ? this.shapeSel[item] || 0 : 0;
+  }
+  openShapeWheel() {
+    const h = this.player && this.player.held;
+    if (h && h.item === 'loader') { this.shapeWheel = { kind: 'dir', item: h.item, cx: this.mouse.x, cy: this.mouse.y, hover: null }; return true; }
+    if (h && h.item === 'gunnery') { this.shapeWheel = { kind: 'side', item: h.item, cx: this.mouse.x, cy: this.mouse.y, hover: null }; return true; }
+    if (!h || ITEMS[h.item].kind !== 'tile' || !SHAPED_TILES.has(ITEMS[h.item].tile)) return false;
+    this.shapeWheel = { item: h.item, cx: this.mouse.x, cy: this.mouse.y, hover: null };
+    return true;
+  }
+  closeShapeWheel(apply) {
+    const wh = this.shapeWheel;
+    if (!wh) return;
+    if (apply) this.applyWheel(wh);
+    this.shapeWheel = null;
+  }
+  applyWheel(wh) {
+    if (wh.hover === null) return;
+    if (wh.kind === 'dir') { if (wh.hover < 8) this.loaderDirs.din = wh.hover; else this.loaderDirs.dout = wh.hover - 8; }
+    else if (wh.kind === 'side') this.gunSide = wh.hover;
+    else this.shapeSel[wh.item] = wh.hover;
+  }
+
   canPlaceTile(cx, cy) {
     const s = this.ship, p = this.player;
     if (!s.isInterior(cx, cy)) return false;
     if (s.get(cx, cy) !== T.EMPTY || s.objectAt(cx, cy)) return false;
     const h = p.held;
-    if (h && ITEMS[h.item].tile === T.BLOCK && aabbOverlap(p.x, p.y, p.w, p.h, cx * TS, cy * TS, TS, TS)) return false;
+    if (h && ITEMS[h.item].tile === T.BLOCK) {
+      const [a0, a1, t0, t1, b0, b1] = SHAPES[this.shapeFor(h.item)].p;
+      if (aabbOverlap(p.x, p.y, p.w, p.h, cx * TS + a0 * TS, cy * TS + Math.min(t0, t1) * TS, (a1 - a0) * TS, (Math.max(b0, b1) - Math.min(t0, t1)) * TS)) return false;
+    }
     return true;
   }
   itemUnder(lx, ly) {

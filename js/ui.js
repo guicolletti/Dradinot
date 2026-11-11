@@ -247,13 +247,13 @@ class UI {
 
   closeAll(silent = false) {
     let any = false;
-    for (const id of ['#panel-fab', '#panel-storage', '#panel-equip', '#help']) {
+    for (const id of ['#panel-fab', '#panel-loader', '#panel-hatch', '#panel-storage', '#panel-equip', '#help']) {
       const e = $(id);
       if (!e.classList.contains('hidden')) { e.classList.add('hidden'); any = true; }
     }
     $('#minimap').classList.remove('big');
-    if ((this.fabOid || this.storeOid) && !silent) this.g.send({ t: 'closeui' });
-    this.fabOid = null; this.storeOid = null;
+    if ((this.fabOid || this.storeOid || this.loaderOid || this.hatchOid) && !silent) this.g.send({ t: 'closeui' });
+    this.fabOid = null; this.storeOid = null; this.loaderOid = null; this.hatchOid = null;
     return any;
   }
 
@@ -272,12 +272,15 @@ class UI {
     this.fabOid = oid;
     const od = OBJECTS[o.type];
     $('#fab-title').textContent = od.name;
+    $('#fab-icon').src = iconURL(o.type);
+    $('#fab-sub').textContent = `${RECIPES[od.fab].length} receitas`;
     const list = $('#fab-recipes');
     list.innerHTML = '';
     RECIPES[od.fab].forEach((r, i) => {
       const b = el('div', 'recipe');
-      const cost = Object.entries(r.cost).map(([m, n]) => `<span class="cost"><img src="${iconURL(m)}">${n}</span>`).join('') || '<span class="cost">grátis</span>';
-      b.innerHTML = `<img class="ri" src="${iconURL(r.out)}"><div class="rn">${ITEMS[r.out].name}${r.n > 1 ? ' ×' + r.n : ''}<div class="rc">${cost}<span class="rt">${r.t}s</span></div></div>`;
+      const cost = Object.entries(r.cost).map(([m, n]) => `<span class="cost" data-m="${m}" data-n="${n}" title="${ITEMS[m].name}"><img src="${iconURL(m)}">${n}</span>`).join('') || '<span class="cost">grátis</span>';
+      b.innerHTML = `<div class="ri-wrap"><img class="ri" src="${iconURL(r.out)}">${r.n > 1 ? `<span class="rn-n">×${r.n}</span>` : ''}</div>`
+        + `<div class="rn">${ITEMS[r.out].name}<div class="rc">${cost}<span class="rt">⏱ ${r.t}s</span></div></div><span class="inq hidden"></span>`;
       b.title = 'Clique: +1  |  Shift: +5  |  Ctrl ou botão direito: repetir';
       b.onclick = (e) => this.g.send({ t: 'fab', op: 'queue', r: i, n: e.ctrlKey ? -1 : e.shiftKey ? 5 : 1 });
       b.oncontextmenu = (e) => { e.preventDefault(); this.g.send({ t: 'fab', op: 'queue', r: i, n: -1 }); };
@@ -295,26 +298,143 @@ class UI {
     const key = JSON.stringify([o.mats, o.queue, o.started, o.stalled, o.blocked, Math.round((o.progress || 0) * 10)]);
     if (key === this._fabKey) return;
     this._fabKey = key;
-    $('#fab-mats').innerHTML = FAB_MATS.map((m) => `<div class="mat"><img src="${iconURL(m)}"><div class="bar"><i style="width:${(o.mats[m] / FAB_CAP) * 100}%;background:${ITEMS[m].color}"></i></div><span>${o.mats[m]}/${FAB_CAP}</span></div>`).join('');
+    $('#fab-mats').innerHTML = FAB_MATS.map((m) => `<div class="mat"><img src="${iconURL(m)}"><span class="mn">${ITEMS[m].name}</span><span>${o.mats[m]}/${FAB_CAP}</span><div class="bar"><i style="width:${(o.mats[m] / FAB_CAP) * 100}%;background:${ITEMS[m].color}"></i></div></div>`).join('');
     const list = RECIPES[OBJECTS[o.type].fab];
+    const isInf = (e) => e.left === Infinity || e.left === null;
+    // produção atual
+    const cur = $('#fab-current');
+    const first = o.queue[0];
+    if (!first) cur.innerHTML = '<div class="empty">Parado. Clique numa receita para produzir.</div>';
+    else {
+      const r = list[first.r];
+      const pct = o.started ? Math.min(100, (o.progress / r.t) * 100) : 0;
+      const st = o.stalled ? ['stalled', 'Sem material'] : o.blocked ? ['blocked', 'Sem espaço para soltar o item'] : o.started ? ['', `Produzindo • ${Math.max(0, r.t - o.progress).toFixed(1)}s`] : ['idle', 'Aguardando'];
+      cur.innerHTML = `<div class="fc ${st[0]}"><img src="${iconURL(r.out)}"><div class="fc-t"><span>${ITEMS[r.out].name}${r.n > 1 ? ' ×' + r.n : ''}</span><span class="muted">${isInf(first) ? '∞' : first.left + ' restante' + (first.left > 1 ? 's' : '')}</span></div>`
+        + `<div><div class="bar"><i style="width:${pct}%"></i></div><div class="fc-s">${st[1]}</div></div></div>`;
+    }
+    // fila (ícones compactos; clique remove)
     const q = $('#fab-queue');
-    q.innerHTML = o.queue.length ? '' : '<small>Fila vazia. Clique numa receita. Carregue materiais clicando no fabricador com eles na mão.</small>';
+    q.innerHTML = o.queue.length ? '' : '<div class="empty">Vazia. Carregue materiais clicando no fabricador com eles na mão.</div>';
     o.queue.forEach((e, k) => {
       const r = list[e.r];
       const d = el('div', 'qitem');
-      const prog = k === 0 && o.started ? (o.progress / r.t) * 100 : 0;
-      const inf = e.left === Infinity || e.left === null;
-      d.innerHTML = `<img src="${iconURL(r.out)}"><span>${inf ? '∞' : '×' + e.left}</span><div class="bar"><i style="width:${prog}%"></i></div>`;
-      if (k === 0 && o.stalled) d.classList.add('stalled');
-      if (k === 0 && o.blocked) d.classList.add('blocked');
-      d.title = 'Clique para remover';
+      d.innerHTML = `<img src="${iconURL(r.out)}"><b>${isInf(e) ? '∞' : '×' + e.left}</b>`;
+      d.title = `${ITEMS[r.out].name} — clique para remover`;
       d.onclick = () => this.g.send({ t: 'fab', op: 'rm', k });
       q.appendChild(d);
     });
+    // receitas: custo que falta em vermelho e quanto já está na fila
     document.querySelectorAll('#fab-recipes .recipe').forEach((b, i) => {
       const r = list[i];
       b.classList.toggle('lack', !Object.entries(r.cost).every(([m, n]) => o.mats[m] >= n));
+      b.querySelectorAll('.cost[data-m]').forEach((c) => c.classList.toggle('miss', (o.mats[c.dataset.m] || 0) < +c.dataset.n));
+      const qs = o.queue.filter((e) => e.r === i);
+      const tag = b.querySelector('.inq');
+      tag.classList.toggle('hidden', !qs.length);
+      if (qs.length) tag.textContent = qs.some(isInf) ? '∞' : qs.reduce((a, e) => a + e.left, 0);
     });
+  }
+
+  // ---------- painel do Carregador ----------
+  openLoader(oid) {
+    const o = this.objById(oid);
+    if (!o) return;
+    this.closeAll(true);
+    this.loaderOid = oid;
+    this._ldKey = null;
+    $('#ld-icon').src = iconURL('loader');
+    // grades 3×3 de direção (a casa do meio é o próprio Carregador)
+    const order = [7, 0, 1, 6, -1, 2, 5, 4, 3];
+    for (const which of ['in', 'out']) {
+      const grid = $('#ld-' + which);
+      grid.innerHTML = '';
+      for (const d of order) {
+        if (d < 0) { grid.appendChild(el('div', 'mid', `<img src="${iconURL('loader')}">`)); continue; }
+        const b = el('button', '', LOADER_ARROWS[d]);
+        b.dataset.d = d;
+        b.title = (which === 'in' ? 'Pegar de: ' : 'Colocar em: ') + LOADER_DIR_NAMES[d];
+        b.onclick = () => this.g.send({ t: 'loader', op: 'dir', which, d });
+        grid.appendChild(b);
+      }
+    }
+    $('#ld-only').onchange = (e) => this.g.send({ t: 'loader', op: 'only', v: e.target.checked });
+    // filtro: todos os itens do jogo
+    const f = $('#ld-filter');
+    f.innerHTML = '';
+    for (const k of Object.keys(ITEMS)) {
+      const b = el('div', 'fi', `<img src="${iconURL(k)}">`);
+      b.dataset.item = k;
+      b.title = ITEMS[k].name;
+      b.onclick = () => this.g.send({ t: 'loader', op: 'filter', item: k, on: !b.classList.contains('on') });
+      f.appendChild(b);
+    }
+    $('#ld-clearf').onclick = () => this.g.send({ t: 'loader', op: 'clearf' });
+    $('#panel-loader').classList.remove('hidden');
+    this.refreshLoader();
+  }
+
+  refreshLoader() {
+    const o = this.objById(this.loaderOid);
+    if (!o) return;
+    const key = JSON.stringify([o.din, o.dout, o.only, o.filter, o.carry, o.wait]);
+    if (key === this._ldKey) return;
+    this._ldKey = key;
+    $('#ld-sub').textContent = `Pega de ${LOADER_DIR_NAMES[o.din]} ${LOADER_ARROWS[o.din]} • coloca em ${LOADER_DIR_NAMES[o.dout]} ${LOADER_ARROWS[o.dout]}`;
+    document.querySelectorAll('#ld-in button').forEach((b) => b.classList.toggle('on', +b.dataset.d === o.din));
+    document.querySelectorAll('#ld-out button').forEach((b) => b.classList.toggle('on', +b.dataset.d === o.dout));
+    $('#ld-only').checked = !!o.only;
+    const f = new Set(o.filter || []);
+    $('#ld-filter').classList.toggle('all', !f.size);
+    document.querySelectorAll('#ld-filter .fi').forEach((b) => b.classList.toggle('on', f.has(b.dataset.item)));
+    $('#ld-fsum').textContent = f.size ? `${f.size} ${f.size > 1 ? 'itens marcados' : 'item marcado'}` : 'nenhum marcado = aceita todos';
+    $('#ld-carry').innerHTML = o.carry
+      ? `<img src="${iconURL(o.carry.item)}"><span>${ITEMS[o.carry.item].name} ×${o.carry.n}${o.wait ? ' <span style="color:#ffb070">— esperando espaço na saída</span>' : ''}</span>`
+      : '<span class="muted">Nada no momento.</span>';
+  }
+
+  // ---------- painel da escotilha de carga ----------
+  openHatch(oid) {
+    const o = this.objById(oid);
+    if (!o) return;
+    this.closeAll(true);
+    this.hatchOid = oid;
+    this._htKey = null;
+    $('#ht-icon').src = iconURL('hatch');
+    $('#ht-open').onchange = (e) => this.g.send({ t: 'hatch', op: 'open', v: e.target.checked });
+    document.querySelectorAll('#ht-mode button').forEach((b) => { b.onclick = () => this.g.send({ t: 'hatch', op: 'fmode', v: b.dataset.v }); });
+    const f = $('#ht-filter');
+    f.innerHTML = '';
+    for (const k of Object.keys(ITEMS)) {
+      const b = el('div', 'fi', `<img src="${iconURL(k)}">`);
+      b.dataset.item = k;
+      b.title = ITEMS[k].name;
+      b.onclick = () => this.g.send({ t: 'hatch', op: 'filter', item: k, on: !b.classList.contains('on') });
+      f.appendChild(b);
+    }
+    $('#ht-clearf').onclick = () => this.g.send({ t: 'hatch', op: 'clearf' });
+    $('#panel-hatch').classList.remove('hidden');
+    this.refreshHatch();
+  }
+
+  refreshHatch() {
+    const o = this.objById(this.hatchOid), s = this.g.ship;
+    if (!o) return;
+    const key = JSON.stringify([o.open, o.fmode, o.filter, s.cargoN]);
+    if (key === this._htKey) return;
+    this._htKey = key;
+    const f = new Set(o.filter || []), allow = o.fmode === 'allow';
+    $('#ht-open').checked = !!o.open;
+    document.querySelectorAll('#ht-mode button').forEach((b) => b.classList.toggle('on', b.dataset.v === o.fmode));
+    $('#ht-filter').classList.toggle('allow', allow);
+    $('#ht-filter').classList.toggle('all', !allow && !f.size);
+    document.querySelectorAll('#ht-filter .fi').forEach((b) => b.classList.toggle('on', f.has(b.dataset.item)));
+    $('#ht-explain').textContent = !o.open ? 'Fechada: nenhum item sai por ela.'
+      : allow ? (f.size ? `Só os ${f.size} ${f.size > 1 ? 'itens marcados passam' : 'item marcado passa'}. O resto fica na caixa de saque, no espaço.` : 'Nenhum item marcado: nada passa. Marque os itens que podem entrar.')
+      : (f.size ? `Todos passam, menos ${f.size > 1 ? `os ${f.size} itens marcados` : 'o item marcado'}, que ficam na caixa de saque, no espaço.` : 'Todos os itens passam. Marque os que você quer barrar.');
+    $('#ht-explain').style.color = o.open && !(allow && !f.size) ? '#9fb0c2' : '#ffb070';
+    $('#ht-fsum').textContent = f.size ? `${f.size} ${f.size > 1 ? 'marcados' : 'marcado'}` : '';
+    $('#ht-sub').textContent = `${o.open ? 'Aberta' : 'Fechada'} • ${allow ? 'só estes itens' : 'todos menos estes'}`;
+    $('#ht-queue').textContent = s.cargoN ? `${s.cargoN} itens na fila de carga da nave` : 'Fila de carga vazia';
   }
 
   openStorage(oid) {
@@ -392,6 +512,8 @@ class UI {
     $('#hint').innerHTML = this.contextHint();
     if (this.fabOid) { if (!this.objById(this.fabOid)) this.closeAll(true); else this.refreshFab(); }
     if (this.storeOid) { if (!this.objById(this.storeOid)) this.closeAll(true); else this.renderStorage(); }
+    if (this.loaderOid) { if (!this.objById(this.loaderOid)) this.closeAll(true); else this.refreshLoader(); }
+    if (this.hatchOid) { if (!this.objById(this.hatchOid)) this.closeAll(true); else this.refreshHatch(); }
   }
 
   contextHint() {
@@ -406,6 +528,11 @@ class UI {
       }
       return txt;
     }
+    if (p.mode === 'gunner' && p.ctrl) {
+      const ts = gunneryTurrets(s, p.ctrl);
+      const ammo = ts.map((t) => `${t.ammo}/${TURRETS[t.type].cap}`).join(' • ');
+      return `<b>Artilharia — ${GUN_SIDE_NAMES[p.ctrl.side]}</b> — ${ts.length ? `${ts.length} torreta${ts.length > 1 ? 's' : ''} (${ammo})` : 'nenhuma torreta comum nesse lado'} • Clique: atirar • R: trocar lado • Espaço/Esc: sair`;
+    }
     if (p.mode === 'turret' && p.ctrl) {
       const t = p.ctrl;
       return `<b>${TURRETS[t.type].name}</b> — munição ${t.ammo}/${TURRETS[t.type].cap}${t.ammoType ? ' (' + AMMO[t.ammoType].name + ')' : ''} • Clique: atirar • Q: descarregar • Espaço/Esc: sair`;
@@ -418,27 +545,36 @@ class UI {
     const h = p.held;
     const hd = h ? ITEMS[h.item] : null;
     if (it) return `${ITEMS[it.item].name}${it.n > 1 ? ' ×' + it.n : ''} — clique para pegar`;
-    if (t) return `${TURRETS[t.type].name} (${t.ammo}/${TURRETS[t.type].cap}${t.ammoType ? ' ' + AMMO[t.ammoType].name : ''}) — ${hd && hd.kind === 'ammo' ? 'clique para carregar (Shift: tudo)' : TURRETS[t.type].rc ? 'disparada pelo leme' : 'clique para controlar'}`;
-    if (o) {
+    const resizing = hd && (hd.tool === 'embiggener' || hd.tool === 'shrinker');   // o clique redimensiona, não usa o alvo
+    if (t && !resizing) return `${TURRETS[t.type].name} (${t.ammo}/${TURRETS[t.type].cap}${t.ammoType ? ' ' + AMMO[t.ammoType].name : ''}) — ${hd && hd.kind === 'ammo' ? 'clique para carregar (Shift: tudo)' : TURRETS[t.type].rc ? 'disparada pelo leme' : 'clique para controlar'}`;
+    if (o && !resizing) {
       const od = OBJECTS[o.type];
       let a = 'clique para usar';
       if (o.type === 'helm') a = 'clique para pilotar';
+      else if (o.type === 'gunnery') a = `clique para controlar as torretas da ${GUN_SIDE_NAMES[o.side]}`;
       else if (od.fab) a = hd && FAB_MATS.includes(h.item) ? 'clique para carregar material' : 'clique para abrir';
       else if (o.type === 'recycler') a = h ? 'clique para reciclar o item na mão' : 'segure um item e clique';
       else if (o.type === 'ejector') a = h ? 'clique para ejetar o item na mão' : 'segure um item e clique';
       else if (o.type === 'door') a = o.open ? 'clique para fechar' : 'clique para abrir';
-      else if (o.type === 'hatch') a = `modo: ${o.mode === 'none' ? 'bloqueada' : 'liberada'} — clique para alternar`;
+      else if (o.type === 'ammo_crate') a = 'metade de cima guarda munição, de baixo retira';
+      else if (o.type === 'loader') a = `pega ${LOADER_ARROWS[o.din]} coloca ${LOADER_ARROWS[o.dout]} — clique para configurar`;
+      else if (o.type === 'hatch') a = `${o.open ? 'aberta' : 'fechada'}${o.filter && o.filter.length ? (o.fmode === 'allow' ? ' • só itens do filtro' : ' • com itens barrados') : o.fmode === 'allow' ? ' • nada marcado no filtro' : ''} — clique para configurar`;
       else if (o.type === 'shield_gen') a = `carga ${Math.round(o.fuel || 0)} — use Reforço/Fluxo`;
       if (hd && hd.tool === 'wrench') a = 'segure para desmontar';
       return `${od.name} — ${a}`;
     }
     if (hd) {
+      if (h.item === 'gunnery') return `Posto de Artilharia — clique para construir • lado: ${GUN_SIDE_NAMES[GUN_SIDES[g.gunSide]]} • R: escolher lado`;
+      if (h.item === 'loader') return `Carregador — clique para construir • pega ${LOADER_ARROWS[g.loaderDirs.din]} coloca ${LOADER_ARROWS[g.loaderDirs.dout]} • R: direções`;
       if (hd.kind === 'tile' || hd.kind === 'object') return `${hd.name} — clique para construir • Q: soltar`;
       if (hd.kind === 'turret') return `${hd.name} — clique no casco externo para instalar`;
       if (hd.tool === 'wrench') return 'Chave inglesa — segure o clique sobre blocos/objetos para desmontar';
       if (hd.tool === 'booster') return 'Reforço de Escudo — clique para recarregar +80 de escudo';
       if (hd.tool === 'repair') return 'Kit de Reparo — clique para restaurar +60 do casco';
-      if (hd.tool === 'embiggener' || hd.tool === 'shrinker') return `${hd.name} — clique para ${hd.tool === 'embiggener' ? 'aumentar' : 'diminuir'} (${g.resizeAxis === 'x' ? 'horizontal' : 'vertical'}) • R: trocar eixo`;
+      if (hd.tool === 'embiggener' || hd.tool === 'shrinker') {
+        const what = g.resizeAxis === 'x' ? 'coluna' : 'linha';
+        return `${hd.name} — clique para ${hd.tool === 'embiggener' ? `inserir uma ${what}` : `remover a ${what} (precisa estar vazia)`} • R: ${g.resizeAxis === 'x' ? 'usar linhas' : 'usar colunas'}`;
+      }
       if (hd.kind === 'equip') return `${hd.name} — clique (ou duplo clique no slot) para equipar`;
       if (hd.kind === 'ammo') return `${hd.name} — clique numa torreta para carregar`;
       if (hd.kind === 'resource') return `${hd.name} — clique num fabricador para carregar`;

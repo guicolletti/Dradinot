@@ -81,15 +81,80 @@
   </div>
 </div>
 
+<!-- Escotilha de carga -->
+<div id="panel-hatch" class="panel hidden">
+  <div class="phead">
+    <span class="fab-head"><img id="ht-icon" alt=""><span><span>Escotilha de Carga</span><small id="ht-sub"></small></span></span>
+    <button class="close">✕</button>
+  </div>
+  <div class="ld-body">
+    <div class="ld-left">
+      <div class="ptitle">Estado</div>
+      <label class="ld-toggle"><input type="checkbox" id="ht-open"><span class="sw"></span><span>Escotilha aberta<small>fechada, nenhum item entra por ela</small></span></label>
+      <div class="ptitle">Modo do filtro</div>
+      <div id="ht-mode">
+        <button data-v="allow">Só estes itens<small>só os marcados entram</small></button>
+        <button data-v="block">Todos menos estes<small>os marcados ficam de fora</small></button>
+      </div>
+      <p id="ht-explain"></p>
+      <div class="ptitle">Carga</div>
+      <div id="ht-queue" class="muted"></div>
+    </div>
+    <div class="ld-right">
+      <div class="ptitle">Itens do filtro <small class="muted" id="ht-fsum"></small></div>
+      <div id="ht-filter"></div>
+      <div class="prow"><button id="ht-clearf">Limpar filtro</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Carregador -->
+<div id="panel-loader" class="panel hidden">
+  <div class="phead">
+    <span class="fab-head"><img id="ld-icon" alt=""><span><span>Carregador</span><small id="ld-sub"></small></span></span>
+    <button class="close">✕</button>
+  </div>
+  <div class="ld-body">
+    <div class="ld-left">
+      <div class="ptitle">Direções</div>
+      <div class="ld-dirs">
+        <div><div class="ld-lab in">Pegar de</div><div class="ld-grid" id="ld-in"></div></div>
+        <div><div class="ld-lab out">Colocar em</div><div class="ld-grid" id="ld-out"></div></div>
+      </div>
+      <div class="ptitle">Opções</div>
+      <label class="ld-toggle"><input type="checkbox" id="ld-only"><span class="sw"></span><span>Só colocar em máquinas<small>não solta itens no chão</small></span></label>
+      <div class="ptitle">Carregando</div>
+      <div id="ld-carry"></div>
+    </div>
+    <div class="ld-right">
+      <div class="ptitle">Filtro de itens <small class="muted" id="ld-fsum"></small></div>
+      <div id="ld-filter"></div>
+      <div class="prow"><button id="ld-clearf">Limpar filtro (aceitar todos)</button></div>
+    </div>
+  </div>
+</div>
+
 <!-- Fabricador -->
 <div id="panel-fab" class="panel hidden">
-  <div class="phead"><span id="fab-title">Fabricador</span><button class="close">✕</button></div>
-  <div id="fab-mats"></div>
-  <div id="fab-recipes"></div>
-  <div class="ptitle">Fila de produção</div>
-  <div id="fab-queue"></div>
-  <div class="prow"><button id="fab-clear">Limpar fila</button><button id="fab-eject">Ejetar materiais</button></div>
-  <small class="muted">Clique: +1 • Shift+clique: +5 • Ctrl+clique ou botão direito: repetir sempre</small>
+  <div class="phead">
+    <span class="fab-head"><img id="fab-icon" alt=""><span><span id="fab-title">Fabricador</span><small id="fab-sub">Receitas disponíveis</small></span></span>
+    <button class="close">✕</button>
+  </div>
+  <div class="fab-body">
+    <div class="fab-left">
+      <div id="fab-recipes"></div>
+      <div class="fab-hint"><span><kbd>Clique</kbd> +1</span><span><kbd>Shift</kbd> +5</span><span><kbd>Ctrl</kbd> ou <kbd>Botão direito</kbd> repetir sempre</span></div>
+    </div>
+    <div class="fab-right">
+      <div class="ptitle">Materiais</div>
+      <div id="fab-mats"></div>
+      <div class="ptitle">Produção</div>
+      <div id="fab-current"></div>
+      <div class="ptitle">Fila <small class="muted">clique para remover</small></div>
+      <div id="fab-queue"></div>
+      <div class="prow"><button id="fab-clear">Limpar fila</button><button id="fab-eject">Ejetar materiais</button></div>
+    </div>
+  </div>
 </div>
 
 <!-- Caixa expansível -->
@@ -130,10 +195,14 @@
       <div>
         <h3>Construção</h3>
         <p>Blocos, passarelas, escadas e redes são colocados clicando dentro da nave. Objetos (leme, fabricadores, escotilhas...) precisam de piso embaixo. A <b>Chave Inglesa</b> desmonta (segure o clique).</p>
-        <p><b>Ampliador</b>/<b>Encolhedor</b> mudam o tamanho da nave (máx. 80×80). <kbd>R</kbd> troca o eixo.</p>
+        <p>Com <b>Bloco</b> ou <b>Rede</b> na mão, segure <kbd>R</kbd> para abrir a roda de formatos (meio bloco, 1/4 de bloco, rampas de 45° e rampas suaves) e solte sobre o formato desejado. Dá para subir as rampas andando, e itens escorregam nelas.</p>
+        <p><b>Ampliador</b> insere uma coluna (ou linha) vazia onde você clicar; <b>Encolhedor</b> remove a coluna (ou linha) clicada, se ela estiver vazia (sem blocos, construções, itens, pessoas ou torretas no casco). <kbd>R</kbd> alterna entre colunas e linhas. Tamanho máximo 80×80.</p>
+        <p><b>Posto de Artilharia</b> (Fabricador de Máquinas): sente nele para mirar com o mouse e atirar com todas as torretas comuns (não RC) de um lado da nave de uma vez. Segurando o item, <kbd>R</kbd> escolhe o lado; sentado, <kbd>R</kbd> troca de lado.</p>
+        <p><b>Carregador</b> (Fabricador de Máquinas): bloco com um braço que pega itens de uma das 8 casas vizinhas e coloca em outra, a cada 1,5 s, levando a pilha inteira. Pega do chão ou de caixas expando; coloca no chão, em fabricadores, caixas expando, gerador de escudo, reciclador, ejetor, torretas (munição) ou em outro Carregador. Segurando-o, <kbd>R</kbd> abre a roda de direções (anel azul: pegar de; laranja: colocar em). Clique num Carregador construído para escolher filtros de itens e a opção "só em máquinas".</p>
+        <p><b>Caixa de Munição</b> + <b>Trilho</b>: a caixa guarda um tipo de munição (metade de cima guarda, de baixo retira). Encoste um Trilho nela e leve o trilho até as torretas, passando pelas casas coladas no casco. Um carrinho sai com até 16 munições, percorre todo o trilho (entrando em cada ramo e voltando) e reabastece as torretas pelo caminho, se a munição for do mesmo tipo ou se a torreta estiver vazia. Quando esvazia, sai outro. O trilho não tem colisão.</p>
         <h3>Recursos e fabricação</h3>
         <p>Atire em <b style="color:#e04040">bots vermelhos</b> (metal e explosivos), <b style="color:#3f7fe0">azuis</b> (torretas) e <b style="color:#3fc060">verdes</b> (bolas). Rochas têm 25% de chance de soltar metal; rochas com <b>diamante branco</b> sempre dão itens raros; cristais <b style="color:#b45cff">roxos</b> dão fluxo.</p>
-        <p>O saque vira caixas flutuantes: encoste a nave nelas e os itens saem pela <b>Escotilha de Carga</b>. Carregue materiais nos fabricadores clicando neles com o material na mão.</p>
+        <p>O saque vira caixas flutuantes: encoste a nave nelas e os itens saem pela <b>Escotilha de Carga</b>. Clique na escotilha para abrir/fechar e escolher um filtro: "só estes itens" ou "todos menos estes". O que nenhuma escotilha aceita fica na caixa de saque, no espaço. Carregue materiais nos fabricadores clicando neles com o material na mão.</p>
         <h3>Escudo e destruição</h3>
         <p>Com escudo zerado, as balas danificam o interior e o casco. Casco zerado = nave destruída (e o jogo salvo é perdido!). Use <b>Reforços de Escudo</b>, <b>Kits de Reparo</b> e <b>Geradores de Escudo</b>.</p>
         <h3>Zonas</h3>

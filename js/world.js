@@ -251,7 +251,7 @@ class World {
   }
 
   // ---------- disparos ----------
-  fireBullet(x, y, angle, ammoKey, team, ownerId, dmgMul = 1) {
+  fireBullet(x, y, angle, ammoKey, team, ownerId, dmgMul = 1, knockMul = 1) {
     const a = AMMO[ammoKey];
     const pellets = a.pellets || 1;
     for (let i = 0; i < pellets; i++) {
@@ -259,7 +259,7 @@ class World {
       const spd = a.speed * (pellets > 1 ? rand(0.85, 1.1) : 1);
       this.bullets.push({
         id: uid(), x, y, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
-        life: a.life * (pellets > 1 ? rand(0.8, 1.1) : 1), ammo: ammoKey, dmg: a.dmg * dmgMul,
+        life: a.life * (pellets > 1 ? rand(0.8, 1.1) : 1), ammo: ammoKey, dmg: a.dmg * dmgMul, dmg0: a.dmg * dmgMul, knockMul,
         team, ownerId, r: a.r, bounces: a.bounce || 0, pierce: a.pierce || 0, age: 0, bounced: false,
       });
     }
@@ -275,7 +275,7 @@ class World {
     }
     const ammoKey = t.ammoType || 'standard';
     const a = AMMO[ammoKey];
-    t.cool = d.rof * (a.rof || 1);
+    t.cool = d.rof * (a.rof || 1) * TURRET_PACE;
     t.burstLeft = d.burst - 1;
     t.burstT = d.burstGap || 0;
     this._shoot(ship, t, ammoKey, infiniteAmmo);
@@ -292,7 +292,7 @@ class World {
     const p = ship.turretWorld(t);
     const bx = p.x + Math.cos(t.angle) * 16, by = p.y + Math.sin(t.angle) * 16;
     const jit = ship.team === 'pirate' ? rand(-0.05, 0.05) : 0;
-    this.fireBullet(bx, by, t.angle + jit, ammoKey, ship.team, ship.id, (d.dmgMul || 1) * (ship.dmgMul || 1));
+    this.fireBullet(bx, by, t.angle + jit, ammoKey, ship.team, ship.id, (d.dmgMul || 1) * (ship.dmgMul || 1) * TURRET_PACE, TURRET_PACE);
     t.recoil = 1;
     this.spark(bx, by, AMMO[ammoKey].color, 3, 60);
     this.sound('shoot', bx, by);
@@ -430,8 +430,10 @@ class World {
     for (const it of s.items) {
       it.age += dt;
       it.vy += GRAVITY * dt;
-      const fr = it.onGround ? Math.pow(0.002, dt) : Math.pow(0.7, dt);
+      // em rampa o atrito é menor e a gravidade puxa o item morro abaixo
+      const fr = it.onGround ? Math.pow(it.slope ? 0.25 : 0.002, dt) : Math.pow(0.7, dt);
       it.vx *= fr;
+      if (it.onGround && it.slope) it.vx += GRAVITY * it.slope / (1 + it.slope * it.slope) * dt;
       const ball = ITEMS[it.item].kind === 'ball';
       const pvx = it.vx, pvy = it.vy;
       it._py = it.y;
@@ -450,14 +452,18 @@ class World {
     for (const o of s.objects) {
       const od = OBJECTS[o.type];
       if (od.fab) this.updateFab(s, o, dt);
+      if (o.type === 'loader') this.updateLoader(s, o, dt);
+      if (o.type === 'ammo_crate') this.updateCrate(s, o, dt);
       if (o.type === 'hatch') {
         o.cool -= dt;
-        if (o.cool <= 0 && s.cargoQueue.length && o.mode !== 'none' && !this.hatchBlocked(s, o)) {
-          const [item, n] = s.cargoQueue[0];
+        // cada escotilha solta o primeiro item da fila que o filtro dela deixa passar
+        const qi = o.cool <= 0 && !this.hatchBlocked(s, o) ? s.cargoQueue.findIndex(([item]) => this.hatchAccepts(o, item)) : -1;
+        if (qi >= 0) {
+          const [item, n] = s.cargoQueue[qi];
           const k = Math.min(n, ITEMS[item].stack);
           const hd = OBJECTS.hatch;
           s.spawnItem(item, k, (o.x + hd.w / 2) * TS + rand(-3, 3), (o.y + hd.h * 0.4) * TS, rand(-60, 60), -rand(80, 160));
-          if (n - k > 0) s.cargoQueue[0] = [item, n - k]; else s.cargoQueue.shift();
+          if (n - k > 0) s.cargoQueue[qi] = [item, n - k]; else s.cargoQueue.splice(qi, 1);
           o.cool = 0.3;
           this.sound('pop', s.cx, s.cy);
         }
@@ -472,10 +478,7 @@ class World {
   pushItemsByCrew(s) {
     if (!s.crew || !s.crew.length || !s.items.length) return;
     const fits = (it, x) => {
-      const x0 = Math.floor(x / TS), x1 = Math.floor((x + it.w - 0.01) / TS);
-      const y0 = Math.floor(it.y / TS), y1 = Math.floor((it.y + it.h - 0.01) / TS);
-      for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) if (s.solidForItem(cx, cy)) return false;
-      return true;
+      return !s.boxHits(x, it.y, it.w, it.h, true);
     };
     for (const c of s.crew) {
       const p = c.player;
@@ -522,12 +525,7 @@ class World {
       if (!grid.has(k)) grid.set(k, []);
       grid.get(k).push(i);
     }
-    const free = (it, x, y) => {
-      const x0 = Math.floor(x / TS), x1 = Math.floor((x + it.w - 0.01) / TS);
-      const y0 = Math.floor(y / TS), y1 = Math.floor((y + it.h - 0.01) / TS);
-      for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) if (s.solidForItem(cx, cy)) return false;
-      return true;
-    };
+    const free = (it, x, y) => !s.boxHits(x, y, it.w, it.h, true);
     for (const it of L) it._touch = false;
     for (let pass = 0; pass < 2; pass++) {
       for (let i = 0; i < L.length; i++) {
@@ -633,9 +631,7 @@ class World {
         // começa pelo centro e vai para as bordas
         const off = (k / 2) % 2 ? -Math.ceil(k / 4) * 2 : Math.ceil(k / 4) * 2;
         const x = clamp(x0 + w / 2 - 5 + off, x0, x0 + w - 10);
-        const cx0 = Math.floor(x / TS), cx1 = Math.floor((x + 9.99) / TS), cy0 = Math.floor(y / TS), cy1 = Math.floor((y + 9.99) / TS);
-        let ok = true;
-        for (let cy = cy0; cy <= cy1 && ok; cy++) for (let cx = cx0; cx <= cx1; cx++) if (s.solidForItem(cx, cy)) { ok = false; break; }
+        let ok = !s.boxHits(x, y, 10, 10, true);
         if (!ok) continue;
         for (const it of near) if (aabbOverlap(it.x, it.y, it.w, it.h, x, y, 10, 10)) { ok = false; break; }
         if (ok) return { x, y };
@@ -644,13 +640,232 @@ class World {
     return null;
   }
 
+  // a escotilha deixa esse item passar? (fechada não deixa nada)
+  hatchAccepts(o, item) {
+    if (!o.open) return false;
+    const inList = o.filter.includes(item);
+    return o.fmode === 'allow' ? inList : !inList;
+  }
   hatchBlocked(s, o) {
-    if (o.mode === 'none') return true;
+    if (!o.open) return true;
     let c = 0;
     const od = OBJECTS[o.type];
     const x0 = o.x * TS, y0 = o.y * TS;
     for (const it of s.items) if (aabbOverlap(it.x, it.y, it.w, it.h, x0, y0, od.w * TS, od.h * TS)) c++;
     return c >= 3 * od.w * od.h;
+  }
+
+  // ---------- Carregador ----------
+  // A cada movimento (LOADER_TIME s) leva a pilha máxima do item da casa de entrada para a de saída.
+  // Entrada: caixa expando (retira) ou itens soltos naquela casa (inclui produtos de fabricador).
+  // Saída: fabricador, expando, gerador de escudo, reciclador, ejetor, outro Carregador, torreta
+  // (munição) ou o chão — este último só se "só em máquinas" estiver desligado.
+  loaderAllows(o, item) { return !o.filter || !o.filter.length || o.filter.includes(item); }
+
+  // tudo o que dá para pegar na casa de entrada (respeitando o filtro)
+  loaderSources(s, o, cx, cy) {
+    const out = [];
+    if (!s.isInterior(cx, cy)) return out;
+    const obj = s.objectAt(cx, cy);
+    if (obj && obj !== o && (obj.type === 'expando' || obj.type === 'ammo_crate')) {
+      const st = obj.store;
+      if (st && st.item && st.n > 0 && this.loaderAllows(o, st.item))
+        out.push({ item: st.item, n: st.n, take: (k) => { st.n -= k; if (st.n <= 0) { st.item = null; st.n = 0; } } });
+      return out;
+    }
+    if (obj && obj.type === 'loader') return out;
+    const x0 = cx * TS, y0 = cy * TS;
+    for (const it of s.items) {
+      if (it.n <= 0 || !this.loaderAllows(o, it.item)) continue;
+      const mx = it.x + it.w / 2, my = it.y + it.h / 2;
+      if (mx < x0 || mx >= x0 + TS || my < y0 || my >= y0 + TS) continue;
+      out.push({ item: it.item, n: it.n, take: (k) => { it.n -= k; if (it.n <= 0) s.items.splice(s.items.indexOf(it), 1); } });
+    }
+    return out;
+  }
+
+  // quanto cabe na casa de saída e como entregar; null = não dá para entregar ali
+  loaderDest(s, o, cx, cy, item) {
+    const d = ITEMS[item];
+    const t = s.turretAtHull(cx, cy);
+    if (t) {
+      if (d.kind !== 'ammo') return null;
+      const a = AMMO[d.ammo], cap = TURRETS[t.type].cap;
+      if (t.ammo > 0 && t.ammoType && t.ammoType !== d.ammo) return null;
+      return { room: Math.floor((cap - t.ammo) / a.shots), put: (k) => { t.ammo += a.shots * k; t.ammoType = d.ammo; } };
+    }
+    if (!s.isInterior(cx, cy)) return null;
+    const obj = s.objectAt(cx, cy);
+    if (obj && obj !== o) {
+      const od = OBJECTS[obj.type];
+      if (od.fab) {
+        if (!FAB_MATS.includes(item)) return null;
+        return { room: FAB_CAP - (obj.mats[item] || 0), put: (k) => { obj.mats[item] = (obj.mats[item] || 0) + k; } };
+      }
+      switch (obj.type) {
+        case 'ammo_crate':
+        case 'expando': {
+          if (obj.type === 'ammo_crate' && d.kind !== 'ammo') return null;
+          const st = obj.store || (obj.store = { item: null, n: 0 });
+          if (st.item && st.item !== item) return null;
+          return { room: expandoCap(item) - st.n, put: (k) => { st.item = item; st.n += k; } };
+        }
+        case 'shield_gen':
+          if (item !== 'booster' && item !== 'flux') return null;
+          return { room: d.stack, put: (k) => { obj.fuel = (obj.fuel || 0) + k * (item === 'booster' ? 60 : 300); } };
+        case 'recycler': {
+          const v = recycleValue(item);
+          if (!Object.keys(v).length) return null;
+          return { room: d.stack, put: (k) => { for (const m in v) if (v[m] * k > 0) s.spawnItem(m, v[m] * k, (obj.x + 1) * TS, obj.y * TS, rand(-40, 40), -150); this.sound('break', s.cx, s.cy); } };
+        }
+        case 'ejector':
+          return { room: d.stack, put: (k) => this.ejectFromShip(s, obj, item, k) };
+        case 'loader':
+          // passa para outro Carregador (corrente de Carregadores)
+          if (obj.carry || !this.loaderAllows(obj, item)) return null;
+          return { room: d.stack, put: (k) => { obj.carry = { item, n: k }; obj.lt = 0; obj.seq = (obj.seq || 0) + 1; obj.wait = false; } };
+      }
+    }
+    if (s.solidAt(cx, cy)) return null;
+    // chão: só se o filtro "só em máquinas" estiver desligado, e um item por vez naquela casa
+    if (o.only) return null;
+    const x0 = cx * TS, y0 = cy * TS;
+    if (s.items.some((it) => it.x + it.w > x0 && it.x < x0 + TS && it.y + it.h > y0 && it.y < y0 + TS)) return null;
+    return { room: d.stack, put: (k) => s.spawnItem(item, k, x0 + TS / 2, y0 + TS / 2, 0, 0) };
+  }
+
+  updateLoader(s, o, dt) {
+    const [ix, iy] = LOADER_DIRS[o.din], [ox, oy] = LOADER_DIRS[o.dout];
+    if (o.carry) {
+      o.lt = (o.lt || 0) + dt;
+      if (o.lt < LOADER_TIME) return;
+      const d = this.loaderDest(s, o, o.x + ox, o.y + oy, o.carry.item);
+      if (d && d.room > 0) {
+        const k = Math.min(d.room, o.carry.n);
+        d.put(k);
+        o.carry.n -= k;
+        if (o.carry.n <= 0) { o.carry = null; o.lt = 0; }
+        else o.carry = { item: o.carry.item, n: o.carry.n };   // novo objeto: o cliente vê a mudança
+      }
+      o.wait = !!o.carry;   // segurando, esperando espaço na saída
+      return;
+    }
+    o.cool = (o.cool || 0) - dt;
+    if (o.cool > 0) return;
+    o.cool = 0.2;
+    // pega o primeiro item da entrada que a saída aceita
+    let src = null;
+    for (const c of this.loaderSources(s, o, o.x + ix, o.y + iy)) {
+      const d = this.loaderDest(s, o, o.x + ox, o.y + oy, c.item);
+      if (d && d.room > 0) { src = c; break; }
+    }
+    if (!src) return;
+    const k = Math.min(src.n, ITEMS[src.item].stack);
+    src.take(k);
+    o.carry = { item: src.item, n: k }; o.lt = 0; o.wait = false; o.seq = (o.seq || 0) + 1;
+  }
+
+  // ---------- Caixa de Munição + Trilho + carrinho ----------
+  // Primeira casa de trilho encostada na caixa (lados, sem diagonais).
+  railStart(s, o) {
+    const d = OBJECTS[o.type], cand = [];
+    for (let x = o.x; x < o.x + d.w; x++) cand.push([x, o.y - 1], [x, o.y + d.h]);
+    for (let y = o.y; y < o.y + d.h; y++) cand.push([o.x - 1, y], [o.x + d.w, y]);
+    return cand.find(([x, y]) => s.get(x, y) === T.RAIL) || null;
+  }
+  // "Tour" completo do trilho a partir de start: entra em cada ramo até a ponta e volta,
+  // terminando no começo. Trilhos se ligam pelos 4 lados.
+  railRoute(s, start) {
+    const key = (x, y) => y * 1000 + x;
+    const seen = new Set([key(...start)]), route = [start];
+    const stack = [[start[0], start[1], 0]];
+    const D4 = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      if (top[2] >= 4) {
+        stack.pop();
+        if (stack.length) { const p = stack[stack.length - 1]; route.push([p[0], p[1]]); }   // volta para o pai
+        continue;
+      }
+      const [dx, dy] = D4[top[2]++];
+      const nx = top[0] + dx, ny = top[1] + dy;
+      if (s.get(nx, ny) !== T.RAIL || seen.has(key(nx, ny))) continue;
+      seen.add(key(nx, ny));
+      route.push([nx, ny]);
+      stack.push([nx, ny, 0]);
+    }
+    return route;
+  }
+  // devolve a munição de um carrinho para a caixa (ou solta no chão se a caixa mudou de tipo)
+  cartReturn(s, o) {
+    const c = o.cart; o.cart = null;
+    if (!c || c.n <= 0) return;
+    const st = o.store;
+    if (!st.item || st.item === c.item) { st.item = c.item; st.n += c.n; }
+    else s.spawnItem(c.item, c.n, c.px || (o.x + 1) * TS, c.py || o.y * TS, 0, -60);
+  }
+  // reabastece as torretas do casco ao lado da casa (cx, cy); devolve quantas munições entregou
+  cartRefill(s, cart, cx, cy) {
+    let used = 0;
+    const done = new Set();
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+      const t = s.turretAtHull(cx + dx, cy + dy);
+      if (!t || done.has(t)) continue;
+      done.add(t);
+      const ammo = ITEMS[cart.item].ammo, a = AMMO[ammo], cap = TURRETS[t.type].cap;
+      if (t.ammo > 0 && t.ammoType && t.ammoType !== ammo) continue;   // outro tipo: só se estiver vazia
+      while (cart.n > 0 && t.ammo + a.shots <= cap) { t.ammo += a.shots; t.ammoType = ammo; cart.n--; used++; }
+    }
+    return used;
+  }
+  updateCrate(s, o, dt) {
+    const st = o.store;
+    let c = o.cart;
+    if (!c) {
+      o.cool = (o.cool || 0) - dt;
+      if (o.cool > 0 || !st.item || st.n <= 0) return;
+      const start = this.railStart(s, o);
+      if (!start) { o.cool = 0.5; return; }
+      const k = Math.min(CART_CAP, st.n);
+      st.n -= k; const item = st.item; if (st.n <= 0) { st.item = null; st.n = 0; }
+      c = o.cart = { item, n: k, route: this.railRoute(s, start), seg: 0, f: 0, pause: 0.4, gave: 0 };
+      c.px = (start[0] + 0.5) * TS; c.py = (start[1] + 0.5) * TS;
+      c.gave += this.cartRefill(s, c, start[0], start[1]);   // a casa de saída também conta
+      if (c.n <= 0) { o.cart = null; o.cool = 0.6; }
+      return;
+    }
+    if (c.pause > 0) { c.pause -= dt; return; }
+    const R = c.route;
+    if (c.seg >= R.length - 1) {
+      // terminou a volta: recalcula o trilho (pode ter mudado) e sai de novo
+      const start = this.railStart(s, o);
+      if (!start) { this.cartReturn(s, o); return; }
+      // de volta na caixa: completa a carga com a munição dela (se for do mesmo tipo)
+      if (st.item === c.item && st.n > 0 && c.n < CART_CAP) {
+        const k = Math.min(CART_CAP - c.n, st.n);
+        c.n += k; st.n -= k;
+        if (st.n <= 0) { st.item = null; st.n = 0; }
+        c.gave = c.gave || 1;   // recarregou: não precisa esperar a pausa longa
+      }
+      c.route = this.railRoute(s, start); c.seg = 0; c.f = 0;
+      c.pause = c.gave ? 0.6 : 2.5;   // volta sem entregar nada: espera mais antes da próxima
+      c.gave = 0;
+      return;
+    }
+    c.f += dt * CART_SPEED / TS;
+    while (c.f >= 1 && c.seg < R.length - 1) {
+      c.f -= 1; c.seg++;
+      const [x, y] = R[c.seg];
+      if (s.get(x, y) !== T.RAIL) { this.cartReturn(s, o); o.cool = 0.5; return; }   // trilho removido no caminho
+      const used = this.cartRefill(s, c, x, y);
+      if (used) { c.gave += used; c.pause = 0.35; c.f = 0; this.sound('load', s.cx, s.cy); }
+      if (c.n <= 0) { o.cart = null; o.cool = 0.6; return; }   // acabou: some, e a caixa solta outro
+      if (c.pause > 0) break;
+    }
+    // posição (px) para desenhar: entre a casa atual e a próxima
+    const a = R[c.seg], b = R[Math.min(c.seg + 1, R.length - 1)], f = Math.min(1, c.f);
+    c.px = (a[0] + 0.5 + (b[0] - a[0]) * f) * TS; c.py = (a[1] + 0.5 + (b[1] - a[1]) * f) * TS;
+    c.dir = b[0] !== a[0] ? Math.sign(b[0] - a[0]) : (c.dir || 1);
   }
 
   updateFab(s, o, dt) {
@@ -775,7 +990,7 @@ class World {
       }
       b.age += dt;
       b.life -= dt;
-      if (a.decay) b.dmg = Math.max(0.5, a.dmg * (1 - b.age / a.life));
+      if (a.decay) b.dmg = Math.max(0.5, (b.dmg0 ?? a.dmg) * (1 - b.age / a.life));
       if (alive && b.life <= 0) {
         alive = false;
         if (a.flak) {
@@ -783,7 +998,7 @@ class World {
             const ang = (k / a.flak) * Math.PI * 2 + rand(-0.2, 0.2);
             this.bullets.push({
               id: uid(), x: b.x, y: b.y, vx: Math.cos(ang) * 520, vy: Math.sin(ang) * 520, life: 0.35, ammo: 'scatter',
-              dmg: a.dmg, team: b.team, ownerId: b.ownerId, r: 2, bounces: 0, pierce: 0, age: 0, bounced: false,
+              dmg: b.dmg0 ?? a.dmg, dmg0: b.dmg0 ?? a.dmg, team: b.team, ownerId: b.ownerId, r: 2, bounces: 0, pierce: 0, age: 0, bounced: false,
             });
           }
           this.spark(b.x, b.y, '#ffb05d', 14, 220);
@@ -802,7 +1017,7 @@ class World {
     const sp = Math.hypot(b.vx, b.vy) || 1;
     const dx = b.vx / sp, dy = b.vy / sp;
     if (a.knock) {
-      const k = a.knock / Math.sqrt(sh.mass) * 6;
+      const k = a.knock * (b.knockMul || 1) / Math.sqrt(sh.mass) * 6;
       sh.vx += dx * k; sh.vy += dy * k;
     }
     if (this.zone.safe) { this.spark(b.x, b.y, '#9fd8ff', 4); return; }
@@ -873,8 +1088,19 @@ class World {
             continue;
           }
           if (hatches.every((h) => this.hatchBlocked(s, h)) || s.cargoQueue.length > 30) continue;
-          for (const it of c.items) s.cargoQueue.push(it.slice());
-          c.dead = true;
+          // só entra o que alguma escotilha aberta aceita; o resto fica na caixa, no espaço
+          const open = hatches.filter((h) => !this.hatchBlocked(s, h));
+          const take = c.items.filter(([item]) => open.some((h) => this.hatchAccepts(h, item)));
+          if (!take.length) continue;
+          for (const it of take) s.cargoQueue.push(it.slice());
+          c.items = c.items.filter((it) => !take.includes(it));
+          if (!c.items.length) c.dead = true;
+          else {
+            // sobra: fica flutuando e é empurrada para longe da nave (não é recoletada na hora)
+            c.fromId = s.id; c.age = 0;
+            const dx = c.x - s.cx, dy = c.y - s.cy, d = Math.hypot(dx, dy) || 1;
+            c.vx += (dx / d) * 90; c.vy += (dy / d) * 90;
+          }
           this.sound('collect', c.x, c.y);
           break;
         }

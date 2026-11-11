@@ -5,7 +5,7 @@
 'use strict';
 
 // ---------- Tiles da nave ----------
-const T = { EMPTY: 0, HULL: 1, BLOCK: 2, WALKWAY: 3, LADDER: 4, NET: 5 };
+const T = { EMPTY: 0, HULL: 1, BLOCK: 2, WALKWAY: 3, LADDER: 4, NET: 5, RAIL: 6 };
 const TILE_INFO = {
   [T.EMPTY]:   { name: 'Vazio', solid: false },
   [T.HULL]:    { name: 'Casco', solid: true, hp: Infinity },
@@ -13,7 +13,59 @@ const TILE_INFO = {
   [T.WALKWAY]: { name: 'Passarela', solid: false, platform: true, hp: 20, item: 'walkway' },
   [T.LADDER]:  { name: 'Escada', solid: false, ladder: true, hp: 20, item: 'ladder' },
   [T.NET]:     { name: 'Rede de Itens', solid: false, net: true, hp: 15, item: 'net' },
+  [T.RAIL]:    { name: 'Trilho', solid: false, rail: true, hp: 20, item: 'rail' },
 };
+
+// ---------- Formatos de bloco ----------
+// Cada formato é um trapézio vertical dentro da célula (coordenadas 0–1, y para baixo):
+// [x0, x1, topo em x0, topo em x1, base em x0, base em x1]. Rampas = topo ou base inclinados.
+// Só o Bloco e a Rede têm formatos (segure R com eles na mão).
+const SHAPES = [
+  { name: 'Bloco inteiro',                 g: 'Inteiro',     p: [0, 1, 0, 0, 1, 1] },
+  { name: 'Meio bloco (baixo)',            g: 'Meio bloco',  p: [0, 1, 0.5, 0.5, 1, 1] },
+  { name: 'Meio bloco (cima)',             g: 'Meio bloco',  p: [0, 1, 0, 0, 0.5, 0.5] },
+  { name: 'Meio bloco (esquerda)',         g: 'Meio bloco',  p: [0, 0.5, 0, 0, 1, 1] },
+  { name: 'Meio bloco (direita)',          g: 'Meio bloco',  p: [0.5, 1, 0, 0, 1, 1] },
+  { name: '1/4 de bloco (baixo esq.)',     g: '1/4 de bloco', p: [0, 0.5, 0.5, 0.5, 1, 1] },
+  { name: '1/4 de bloco (baixo dir.)',     g: '1/4 de bloco', p: [0.5, 1, 0.5, 0.5, 1, 1] },
+  { name: '1/4 de bloco (cima esq.)',      g: '1/4 de bloco', p: [0, 0.5, 0, 0, 0.5, 0.5] },
+  { name: '1/4 de bloco (cima dir.)',      g: '1/4 de bloco', p: [0.5, 1, 0, 0, 0.5, 0.5] },
+  { name: 'Rampa 45° (sobe à direita)',    g: 'Rampa 45°',   p: [0, 1, 1, 0, 1, 1] },
+  { name: 'Rampa 45° (sobe à esquerda)',   g: 'Rampa 45°',   p: [0, 1, 0, 1, 1, 1] },
+  { name: 'Rampa 45° de teto (direita)',   g: 'Rampa 45°',   p: [0, 1, 0, 0, 0, 1] },
+  { name: 'Rampa 45° de teto (esquerda)',  g: 'Rampa 45°',   p: [0, 1, 0, 0, 1, 0] },
+  { name: 'Rampa suave baixa (sobe à dir.)', g: 'Rampa suave', p: [0, 1, 1, 0.5, 1, 1] },
+  { name: 'Rampa suave alta (sobe à dir.)',  g: 'Rampa suave', p: [0, 1, 0.5, 0, 1, 1] },
+  { name: 'Rampa suave baixa (sobe à esq.)', g: 'Rampa suave', p: [0, 1, 0.5, 1, 1, 1] },
+  { name: 'Rampa suave alta (sobe à esq.)',  g: 'Rampa suave', p: [0, 1, 0, 0.5, 1, 1] },
+  { name: 'Rampa suave de teto baixa (dir.)', g: 'Rampa suave', p: [0, 1, 0, 0, 0, 0.5] },
+  { name: 'Rampa suave de teto alta (dir.)',  g: 'Rampa suave', p: [0, 1, 0, 0, 0.5, 1] },
+  { name: 'Rampa suave de teto baixa (esq.)', g: 'Rampa suave', p: [0, 1, 0, 0, 0.5, 0] },
+  { name: 'Rampa suave de teto alta (esq.)',  g: 'Rampa suave', p: [0, 1, 0, 0, 1, 0.5] },
+];
+const SHAPED_TILES = new Set([T.BLOCK, T.NET]);
+// contorno do formato (para desenhar), em pixels a partir do canto da célula
+function shapePoly(shape, x, y, s) {
+  const [x0, x1, t0, t1, b0, b1] = SHAPES[shape].p;
+  return [[x + x0 * s, y + t0 * s], [x + x1 * s, y + t1 * s], [x + x1 * s, y + b1 * s], [x + x0 * s, y + b0 * s]];
+}
+
+// ---------- Carregador ----------
+// 8 direções (vizinhos da célula), no sentido horário a partir de cima
+const LOADER_DIRS = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]];
+const LOADER_DIR_NAMES = ['cima', 'cima-direita', 'direita', 'baixo-direita', 'baixo', 'baixo-esquerda', 'esquerda', 'cima-esquerda'];
+const LOADER_ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+const LOADER_TIME = 1.5;   // segundos por movimento (leva a pilha máxima do item de uma vez)
+
+// ---------- Posto de Artilharia ----------
+const GUN_SIDES = ['top', 'right', 'bottom', 'left'];
+const GUN_SIDE_NAMES = { top: 'cima', right: 'direita', bottom: 'baixo', left: 'esquerda' };
+// torretas que um posto controla: as comuns (não RC) do lado escolhido
+function gunneryTurrets(s, o) { return s.turrets.filter((t) => t.side === o.side && !TURRETS[t.type].rc); }
+
+// ---------- Caixa de Munição + Trilho ----------
+const CART_CAP = 16;      // munições por carrinho (1 pilha)
+const CART_SPEED = 120;   // px/s, ritmo de caminhada
 
 // ---------- Munições ----------
 // shots = disparos por caixa carregada; dmg = dano por projétil
@@ -33,6 +85,10 @@ const AMMO = {
 };
 
 // ---------- Torretas (montadas no casco, ocupam 3 tiles) ----------
+// Ritmo das torretas: cada tiro demora TURRET_PACE vezes mais e causa TURRET_PACE vezes mais
+// dano (e empurrão). O dano por segundo fica igual e cada carga de munição dura TURRET_PACE vezes mais.
+const TURRET_PACE = 2.5;
+
 const TURRETS = {
   turret:       { name: 'Torreta', color: '#8d97a6', rof: 0.38, burst: 1, auto: false, cap: 24, rc: false },
   turret_auto:  { name: 'Torreta Automática', color: '#9aa7b8', rof: 0.14, burst: 1, auto: true, cap: 36, rc: false, dmgMul: 0.75 },
@@ -55,6 +111,9 @@ const OBJECTS = {
   shield_gen:    { name: 'Gerador de Escudo', w: 2, h: 2, floor: true, hp: 70, color: '#2f6f9a' },
   spawn:         { name: 'Ponto de Renascimento', w: 1, h: 2, floor: true, hp: 30, color: '#3fa0a0' },
   door:          { name: 'Porta', w: 1, h: 2, floor: false, hp: 50, color: '#6a6f78', solidWhenClosed: true },
+  gunnery:       { name: 'Posto de Artilharia', w: 2, h: 2, floor: true, hp: 60, color: '#4e4466' },
+  ammo_crate:    { name: 'Caixa de Munição', w: 2, h: 2, floor: true, hp: 70, color: '#5b6b3a' },
+  loader:        { name: 'Carregador', w: 1, h: 1, floor: false, hp: 60, color: '#b8862e', solid: true },
 };
 
 // ---------- Itens ----------
@@ -64,10 +123,11 @@ const ITEMS = {
   explosives: { name: 'Explosivos', kind: 'resource', stack: 16, color: '#e2553b', desc: 'Usado para fabricar munição.' },
   flux:       { name: 'Cristal de Fluxo', kind: 'resource', stack: 16, color: '#b45cff', desc: 'Material raro. Usado em itens avançados.' },
 
-  block:   { name: 'Bloco', kind: 'tile', tile: T.BLOCK, stack: 16, color: '#7d8794', desc: 'Bloco sólido de construção.' },
+  block:   { name: 'Bloco', kind: 'tile', tile: T.BLOCK, stack: 16, color: '#7d8794', desc: 'Bloco sólido de construção. Segure R para escolher o formato (meio bloco, 1/4, rampas).' },
   walkway: { name: 'Passarela', kind: 'tile', tile: T.WALKWAY, stack: 16, color: '#a07a4a', desc: 'Plataforma: pule por baixo, aperte S para descer.' },
   ladder:  { name: 'Escada', kind: 'tile', tile: T.LADDER, stack: 16, color: '#b08a50', desc: 'Suba e desça com W/S.' },
-  net:     { name: 'Rede de Itens', kind: 'tile', tile: T.NET, stack: 16, color: '#6fb0b0', desc: 'Jogadores passam, itens não.' },
+  rail:    { name: 'Trilho', kind: 'tile', tile: T.RAIL, stack: 32, color: '#9a8a6a', desc: 'Liga uma Caixa de Munição às torretas: o carrinho percorre o trilho e reabastece as armas do casco ao lado. Fica no fundo (não tem colisão).' },
+  net:     { name: 'Rede de Itens', kind: 'tile', tile: T.NET, stack: 16, color: '#6fb0b0', desc: 'Jogadores passam, itens não. Segure R para escolher o formato.' },
 
   helm:            { name: 'Leme', kind: 'object', obj: 'helm', stack: 1, color: '#8a6a3e', desc: 'Pilote a nave com WASD.' },
   fab_starter:     { name: 'Fabricador Inicial', kind: 'object', obj: 'fab_starter', stack: 1, color: '#6b7d8f' },
@@ -82,6 +142,9 @@ const ITEMS = {
   shield_gen:      { name: 'Gerador de Escudo', kind: 'object', obj: 'shield_gen', stack: 1, color: '#3a8ac0', desc: 'Carregue com reforços ou fluxo para regenerar o escudo.' },
   spawn:           { name: 'Ponto de Renascimento', kind: 'object', obj: 'spawn', stack: 1, color: '#4fc0c0', desc: 'Você renasce aqui.' },
   door:            { name: 'Porta', kind: 'object', obj: 'door', stack: 1, color: '#7f8590', desc: 'Clique para abrir/fechar.' },
+  gunnery:         { name: 'Posto de Artilharia', kind: 'object', obj: 'gunnery', stack: 1, color: '#7a6aa0', desc: 'Sente nele para mirar e atirar com todas as torretas comuns (não RC) de um lado da nave ao mesmo tempo. Segure R para escolher o lado; sentado, R troca de lado.' },
+  ammo_crate:      { name: 'Caixa de Munição', kind: 'object', obj: 'ammo_crate', stack: 1, color: '#6f8248', desc: 'Guarda um tipo de munição. Com um Trilho encostado nela, solta um carrinho que leva até 16 munições e reabastece as torretas pelo caminho.' },
+  loader:          { name: 'Carregador', kind: 'object', obj: 'loader', stack: 8, color: '#d09a3a', desc: 'Bloco com braço: pega itens de um lado e coloca do outro (chão, máquinas, torretas ou outro Carregador). Segure R para escolher as direções; clique nele construído para filtros.' },
 
   turret:       { name: 'Torreta', kind: 'turret', turret: 'turret', stack: 1, color: '#8d97a6', desc: 'Torreta manual. Instale no casco externo.' },
   turret_auto:  { name: 'Torreta Automática', kind: 'turret', turret: 'turret_auto', stack: 1, color: '#9aa7b8', desc: 'Dispara enquanto o botão estiver pressionado.' },
@@ -147,6 +210,7 @@ const RECIPES = {
     R('booster', 1, 3, { metal: 2 }),
   ],
   engineering: [
+    R('rail', 4, 1, { metal: 1 }),
     R('wrench', 1, 10, { metal: 4 }),
     R('shredder', 1, 10, { metal: 4 }),
     R('booster', 1, 3, { metal: 2 }),
@@ -171,6 +235,9 @@ const RECIPES = {
     R('shield_gen', 1, 15, { metal: 12, flux: 1 }),
     R('spawn', 1, 10, { metal: 8 }),
     R('door', 1, 10, { metal: 8 }),
+    R('loader', 1, 8, { metal: 8 }),
+    R('ammo_crate', 1, 12, { metal: 12 }),
+    R('gunnery', 1, 15, { metal: 12 }),
     R('turret', 1, 20, { metal: 12, flux: 2 }),
   ],
   equipment: [

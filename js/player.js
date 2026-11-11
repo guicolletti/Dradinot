@@ -8,23 +8,46 @@ const GRAVITY = 700;
 const REACH = TS * 7;
 
 // Movimento com colisão contra a grade da nave (usado por jogador e itens).
+// Os blocos podem ter formatos (meio bloco, 1/4, rampas): cada célula sólida vira um
+// trapézio. Personagens sobem e descem rampas andando (apoiados pelo centro dos pés);
+// itens apoiam no ponto mais alto e escorregam (ver e.slope, inclinação do apoio).
 // boxes (opcional): caixas sólidas extras {x,y,w,h}, ex.: itens soltos para o jogador.
 function collideMove(e, ship, dt, forItem, dropping, boxes) {
-  const solid = forItem ? (x, y) => ship.solidForItem(x, y) : (x, y) => ship.solidAt(x, y);
+  const mode = forItem ? 'max' : 'center';
   const maxV = TS * 0.9 / dt;
   e.vx = clamp(e.vx, -maxV, maxV);
   e.vy = clamp(e.vy, -maxV, maxV);
+  const wasGround = e.onGround;
   let hitX = false, hitY = false;
-  // eixo X
-  const prevLeft = e.x, prevRight = e.x + e.w;
-  e.x += e.vx * dt;
-  let y0 = Math.floor(e.y / TS), y1 = Math.floor((e.y + e.h - 0.01) / TS);
-  if (e.vx > 0) {
-    const cx = Math.floor((e.x + e.w - 0.01) / TS);
-    for (let cy = y0; cy <= y1; cy++) if (solid(cx, cy)) { e.x = cx * TS - e.w; hitX = true; break; }
-  } else if (e.vx < 0) {
-    const cx = Math.floor(e.x / TS);
-    for (let cy = y0; cy <= y1; cy++) if (solid(cx, cy)) { e.x = (cx + 1) * TS; hitX = true; break; }
+  const slopeOf = (p) => (p.T1 - p.T0) / (p.X1 - p.X0);
+
+  // ---------- eixo X ----------
+  const prevX = e.x, prevLeft = e.x, prevRight = e.x + e.w;
+  const dx = e.vx * dt;
+  e.x += dx;
+  if (dx !== 0) {
+    let lift = 0, blocked = false;
+    const reach = Math.abs(dx) + 2;
+    for (const p of ship.solidPieces(e.x, e.y - reach, e.x + e.w, e.y + e.h, forItem)) {
+      const o0 = Math.max(e.x, p.X0), o1 = Math.min(e.x + e.w, p.X1);
+      if (o1 - o0 <= 0.01) continue;
+      const top = pieceTop(p, e.x + e.w / 2, o0, o1, mode), bot = pieceBot(p, e.x + e.w / 2, o0, o1, mode);
+      if (bot - top < 0.01 || e.y >= bot - 0.01 || e.y + e.h <= top + 0.01) continue;
+      // rampa: em vez de bater, sobe por ela (no máximo o que a inclinação permite neste passo)
+      const pen = e.y + e.h - top;
+      if (p.T0 !== p.T1 && pen <= Math.abs(dx) * Math.abs(slopeOf(p)) + 1.2) { lift = Math.max(lift, pen); continue; }
+      // personagem no chão sobe sozinho desníveis de até meia largura (fim de rampa encontrando
+      // o platô); degraus de verdade (meio bloco = 8px) continuam precisando de pulo
+      if (!forItem && wasGround && pen <= e.w / 2 + 0.6) { lift = Math.max(lift, pen); continue; }
+      blocked = true;
+      if (dx > 0) e.x = Math.max(prevX, Math.min(e.x, p.X0 - e.w));
+      else e.x = Math.min(prevX, Math.max(e.x, p.X1));
+    }
+    if (lift > 0) {
+      if (!ship.boxHits(e.x, e.y - lift, e.w, e.h, forItem, mode)) { e.y -= lift; e.onGround = true; }
+      else { e.x = prevX; blocked = true; }
+    }
+    if (blocked) hitX = true;
   }
   if (boxes && e.vx !== 0) {
     for (const b of boxes) {
@@ -34,27 +57,50 @@ function collideMove(e, ship, dt, forItem, dropping, boxes) {
       else if (e.vx < 0 && prevLeft >= b.x + b.w - 0.5 && e.x < b.x + b.w) { e.x = b.x + b.w; hitX = true; }
     }
   }
-  // eixo Y
+
+  // ---------- eixo Y ----------
   const prevBottom = e.y + e.h, prevTop = e.y;
   e.y += e.vy * dt;
   e.onGround = false;
-  const x0 = Math.floor(e.x / TS), x1 = Math.floor((e.x + e.w - 0.01) / TS);
+  e.slope = 0;
+  const cxm = e.x + e.w / 2;
   if (e.vy >= 0) {
-    const cy = Math.floor((e.y + e.h - 0.01) / TS);
-    for (let cx = x0; cx <= x1; cx++) {
-      // itens atravessam passarelas e topos de escada (só personagens ficam em cima deles)
-      const plat = !forItem && !dropping && ship.platformAt(cx, cy) && prevBottom <= cy * TS + 0.5;
-      if (solid(cx, cy) || plat) { e.y = cy * TS - e.h; e.vy = 0; hitY = true; e.onGround = true; break; }
+    // quem estava no chão "gruda" no piso ao descer rampas (sem ficar pulando degraus)
+    const snap = !wasGround ? 0 : forItem ? Math.abs(dx) * 1.1 + 1 : Math.max(Math.abs(dx) * 1.1 + 1, e.w / 2 + 1);
+    let best = Infinity, bestSlope = 0;
+    for (const p of ship.solidPieces(e.x, prevBottom - 1, e.x + e.w, e.y + e.h + snap + 0.01, forItem)) {
+      const o0 = Math.max(e.x, p.X0), o1 = Math.min(e.x + e.w, p.X1);
+      if (o1 - o0 <= 0.01) continue;
+      const top = pieceTop(p, cxm, o0, o1, mode), bot = pieceBot(p, cxm, o0, o1, mode);
+      if (bot - top < 0.01) continue;
+      if (top >= prevBottom - 0.75 && top <= e.y + e.h + snap && top < best) { best = top; bestSlope = slopeOf(p); }
     }
+    // passarelas e topo de escada (só personagens; itens atravessam)
+    if (!forItem && !dropping) {
+      const cx0 = Math.floor(e.x / TS), cx1 = Math.floor((e.x + e.w - 0.01) / TS);
+      for (let cy = Math.floor(prevBottom / TS); cy <= Math.floor((e.y + e.h + snap) / TS); cy++)
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const top = cy * TS;
+          if (ship.platformAt(cx, cy) && prevBottom <= top + 0.5 && top <= e.y + e.h + snap && top < best) { best = top; bestSlope = 0; }
+        }
+    }
+    if (best < Infinity) { e.y = best - e.h; e.vy = 0; hitY = true; e.onGround = true; e.slope = bestSlope; }
   } else {
-    const cy = Math.floor(e.y / TS);
-    for (let cx = x0; cx <= x1; cx++) if (solid(cx, cy)) { e.y = (cy + 1) * TS; e.vy = 0; hitY = true; break; }
+    let best = -Infinity;
+    for (const p of ship.solidPieces(e.x, e.y - 0.01, e.x + e.w, prevTop + 1, forItem)) {
+      const o0 = Math.max(e.x, p.X0), o1 = Math.min(e.x + e.w, p.X1);
+      if (o1 - o0 <= 0.01) continue;
+      const top = pieceTop(p, cxm, o0, o1, mode), bot = pieceBot(p, cxm, o0, o1, mode);
+      if (bot - top < 0.01) continue;
+      if (bot <= prevTop + 0.75 && bot > e.y && bot > best) best = bot;
+    }
+    if (best > -Infinity) { e.y = best; e.vy = 0; hitY = true; }
   }
   if (boxes) {
     for (const b of boxes) {
       if (e.x + e.w <= b.x + 0.01 || e.x >= b.x + b.w - 0.01) continue; // sem sobreposição horizontal
       if (e.vy >= 0 && prevBottom <= b.y + 0.5 && e.y + e.h > b.y) {
-        e.y = b.y - e.h; e.vy = 0; hitY = true; e.onGround = true; // em pé sobre o item
+        e.y = b.y - e.h; e.vy = 0; hitY = true; e.onGround = true; e.slope = 0; // em pé sobre o item
       } else if (e.vy < 0 && prevTop >= b.y + b.h - 0.5 && e.y < b.y + b.h) {
         e.y = b.y + b.h; e.vy = 0; hitY = true; // bateu a cabeça no item
       }

@@ -57,24 +57,24 @@ class Session {
   }
 
   overlapsSolid(x, y) {
-    const s = this.ship, p = this.player;
-    const x0 = Math.floor((x + 1) / TS), x1 = Math.floor((x + p.w - 1) / TS);
-    const y0 = Math.floor((y + 1) / TS), y1 = Math.floor((y + p.h - 1) / TS);
-    for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) if (s.solidAt(cx, cy)) return true;
-    return false;
+    // mesma regra da física do personagem (rampas pelo centro dos pés), com 1px de folga
+    const p = this.player;
+    return this.ship.boxHits(x + 1, y + 1, p.w - 2, p.h - 2, false, 'center');
   }
 
   handle(m) {
     if (!this.player || !this.ship) return;
     switch (m.t) {
       case 'in': this.onInput(m); break;
-      case 'click': if (this.player.mode === 'walk') this.primaryClick(+m.lx, +m.ly, !!m.sh); break;
+      case 'click': if (this.player.mode === 'walk') { this.placeCode = clamp(m.shp | 0, 0, 63); this.placeShape = Math.min(this.placeCode, SHAPES.length - 1); this.primaryClick(+m.lx, +m.ly, !!m.sh); } break;
       case 'key': this.onKey(m.c, !!m.sh); break;
       case 'inv': this.invMove(m); break;
       case 'throw': this.throwFrom(m); break;
       case 'equip': this.equipFromSlot(m.i | 0); break;
       case 'unequip': this.unequip(m.s); break;
       case 'fab': this.fabOp(m); break;
+      case 'loader': this.loaderOp(m); break;
+      case 'hatch': this.hatchOp(m); break;
       case 'closeui': this.ui = null; break;
       case 'chat': this.chat(String(m.text || '').slice(0, 140)); break;
     }
@@ -89,12 +89,22 @@ class Session {
     }
     if (p.mode === 'helm') { if (c === 'KeyQ') this.tryPortal(); return; }
     if (p.mode === 'turret') { if (c === 'KeyQ') this.unloadTurret(p.ctrl); return; }
+    if (p.mode === 'gunner') {
+      if (c === 'KeyR' && p.ctrl) {
+        const o = p.ctrl;
+        o.side = GUN_SIDES[(GUN_SIDES.indexOf(o.side) + (shift ? 3 : 1)) % 4];
+        const n = gunneryTurrets(this.ship, o).length;
+        this.notify(`Artilharia: lado ${GUN_SIDE_NAMES[o.side]} (${n} torreta${n === 1 ? '' : 's'})`, '#cfe');
+        this.sfx('click');
+      }
+      return;
+    }
     if (c === 'KeyQ') this.dropHeld(shift);
     if (c === 'KeyR') {
       const h = p.held;
       if (h && (h.item === 'embiggener' || h.item === 'shrinker')) {
         this.resizeAxis = this.resizeAxis === 'x' ? 'y' : 'x';
-        this.notify(`Eixo de redimensionamento: ${this.resizeAxis === 'x' ? 'horizontal (direita)' : 'vertical (cima)'}`, '#cfe');
+        this.notify(`Eixo: ${this.resizeAxis === 'x' ? 'colunas (aumenta/diminui na horizontal)' : 'linhas (aumenta/diminui na vertical)'}`, '#cfe');
       }
     }
   }
@@ -133,6 +143,17 @@ class Session {
         // só dispara se o mouse estiver no lado da torreta (dentro do alcance de mira)
         if (this.mouse.left && s.turretCanAim(t, raw)) w.fireTurret(s, t, false, () => this.sfxMe('click'));
       }
+    } else if (p.mode === 'gunner') {
+      if (!s.objects.includes(p.ctrl)) { this.exitControl(); return; }
+      // todas as torretas comuns do lado escolhido miram no mouse e atiram juntas
+      // (uma torreta que alguém está usando sozinho fica com essa pessoa)
+      for (const t of gunneryTurrets(s, p.ctrl)) {
+        if (t.user && t.user !== this) continue;
+        const tw = s.turretWorld(t);
+        const raw = Math.atan2(this.mouse.y - tw.y, this.mouse.x - tw.x);
+        t.angle += clamp(angDiff(t.angle, s.clampTurretAngle(t, raw)), -10 * dt, 10 * dt);
+        if (this.mouse.left && s.turretCanAim(t, raw)) w.fireTurret(s, t, false, () => this.sfxMe('click'));
+      }
     } else if (p.mode === 'turret') {
       const t = p.ctrl;
       if (!s.turrets.includes(t) || t.user !== this) { this.exitControl(); return; }
@@ -161,14 +182,17 @@ class Session {
   // ---------- auxiliares ----------
   inReach(lx, ly) { const p = this.player; return dist(p.cxL, p.cyL, lx, ly) <= REACH + 4; }
 
-  canPlaceTile(cx, cy, tile) {
+  canPlaceTile(cx, cy, tile, shape = 0) {
     const s = this.ship;
     if (!s.isInterior(cx, cy)) return false;
     if (s.get(cx, cy) !== T.EMPTY || s.objectAt(cx, cy)) return false;
     if (tile === T.BLOCK) {
+      // não deixa construir em cima de alguém (só a parte que o formato ocupa)
+      const [a0, a1, t0, t1, b0, b1] = SHAPES[shape].p;
+      const bx = cx * TS + a0 * TS, bw = (a1 - a0) * TS, by = cy * TS + Math.min(t0, t1) * TS, bh = (Math.max(b0, b1) - Math.min(t0, t1)) * TS;
       for (const c of s.crew) {
         const p = c.player;
-        if (p && aabbOverlap(p.x, p.y, p.w, p.h, cx * TS, cy * TS, TS, TS)) return false;
+        if (p && aabbOverlap(p.x, p.y, p.w, p.h, bx, by, bw, bh)) return false;
       }
     }
     return true;
@@ -247,6 +271,8 @@ class Session {
     }
     // chave inglesa: segurar desmonta; um clique rápido num objeto ainda interage
     if (d && d.tool === 'wrench') { this.wrench = { t: 0, need: 0, key: null, age: 0, pend: turret || obj || null }; return; }
+    // ampliador/encolhedor: agem na coluna/linha clicada, mesmo em cima de construções
+    if (d && (d.tool === 'embiggener' || d.tool === 'shrinker')) { this.resizeShip(d.tool === 'embiggener' ? 1 : -1, lx, ly); return; }
 
     if (d && turret && d.kind === 'ammo') { this.loadTurret(turret, h, shift); return; }
     if (d && obj) {
@@ -261,7 +287,7 @@ class Session {
       }
       if (obj.type === 'recycler') { this.recycle(obj, h); return; }
       if (obj.type === 'ejector') { this.eject(obj, h); return; }
-      if (obj.type === 'expando') { this.expandoClick(obj, ly, shift, true); return; }
+      if (obj.type === 'expando' || obj.type === 'ammo_crate') { this.expandoClick(obj, ly, shift, true); return; }
     }
     if (turret) { this.controlTurret(turret); return; }
     if (obj) { this.interact(obj); return; }
@@ -273,9 +299,10 @@ class Session {
   expandoClick(o, ly, shift, canDeposit) {
     const p = this.player, h = p.held;
     const st = o.store || (o.store = { item: null, n: 0 });
-    const top = ly < (o.y + OBJECTS.expando.h / 2) * TS;
+    const top = ly < (o.y + OBJECTS[o.type].h / 2) * TS;
     if (top) {
       if (!h || !canDeposit) { this.notify('Segure um item para guardar na caixa.', '#aaa'); return; }
+      if (o.type === 'ammo_crate' && ITEMS[h.item].kind !== 'ammo') { this.notify('A Caixa de Munição só guarda munição.', '#ffb070'); this.sfxMe('error'); return; }
       if (st.item && st.item !== h.item) {
         this.notify(`Esta caixa só guarda ${ITEMS[st.item].name}.`, '#ffb070'); this.sfxMe('error'); return;
       }
@@ -305,15 +332,19 @@ class Session {
   useHeld(lx, ly, cx, cy) {
     const p = this.player, s = this.ship, h = p.held, d = ITEMS[h.item];
     if (d.kind === 'tile') {
-      if (this.canPlaceTile(cx, cy, d.tile)) {
-        s.set(cx, cy, d.tile); s.recalc();
+      if (this.canPlaceTile(cx, cy, d.tile, this.placeShape || 0)) {
+        s.set(cx, cy, d.tile, SHAPED_TILES.has(d.tile) ? this.placeShape || 0 : 0); s.recalc();
         this.consumeHeld(1); this.sfx('place');
       } else this.sfxMe('error');
     } else if (d.kind === 'object') {
       const od = OBJECTS[d.obj];
       const ox = cx - Math.floor((od.w - 1) / 2), oy = cy - (od.h - 1);
+      // objetos sólidos (Carregador) não podem nascer em cima de alguém ou de itens
+      const blocked = od.solid && (s.crew.some((c) => c.player && aabbOverlap(c.player.x, c.player.y, c.player.w, c.player.h, ox * TS, oy * TS, od.w * TS, od.h * TS))
+        || s.items.some((it) => aabbOverlap(it.x, it.y, it.w, it.h, ox * TS, oy * TS, od.w * TS, od.h * TS)));
+      if (blocked) { this.notify('Tem algo no caminho.', '#ffb070'); this.sfxMe('error'); return; }
       if (s.canPlaceObject(d.obj, ox, oy)) {
-        s.placeObject(d.obj, ox, oy);
+        s.placeObject(d.obj, ox, oy, d.obj === 'loader' ? { din: (this.placeCode >> 3) & 7, dout: this.placeCode & 7 } : d.obj === 'gunnery' ? { side: GUN_SIDES[this.placeCode & 3] } : {});
         this.consumeHeld(1); this.sfx('place');
         this.notify(`${od.name} construído.`, '#cfe');
       } else { this.notify(od.floor ? 'Espaço inválido (precisa de piso embaixo e área livre).' : 'Espaço inválido.', '#ffb070'); this.sfxMe('error'); }
@@ -334,15 +365,22 @@ class Session {
       s.integrity = Math.min(s.maxIntegrity, s.integrity + 60);
       this.consumeHeld(1); this.sfx('place');
     } else if (d.tool === 'embiggener' || d.tool === 'shrinker') {
-      const dir = d.tool === 'embiggener' ? 1 : -1;
-      const err = s.resize(this.resizeAxis, dir);
-      if (err) { this.notify(err, '#ffb070'); this.sfxMe('error'); return; }
-      if (this.resizeAxis === 'y') for (const c of s.crew) if (c.player) { c.player.y += dir * TS; c.player.tp++; }
-      this.consumeHeld(1); this.sfx('place');
-      this.uni.shipMsg(s, `Nave agora tem ${s.w}x${s.h}.`, '#cfe');
+      this.resizeShip(d.tool === 'embiggener' ? 1 : -1, lx, ly);
     } else if (d.kind === 'equip') {
       this.equipFromSlot(p.sel);
     }
+  }
+
+  // insere (dir = 1) ou remove (dir = -1) a coluna/linha sob o mouse, no eixo escolhido com R
+  resizeShip(dir, lx, ly) {
+    const s = this.ship, axis = this.resizeAxis;
+    const at = resizeTarget(s, axis, dir, lx, ly);
+    const people = s.crew.map((c) => c.player).filter((p) => p && p.mode === 'walk');
+    const err = s.resizeAt(axis, dir, at, people);
+    if (err) { this.notify(err, '#ffb070'); this.sfxMe('error'); return; }
+    for (const p of people) p.tp++;   // reposiciona os tripulantes no cliente
+    this.consumeHeld(1); this.sfx('place');
+    this.uni.shipMsg(s, `Nave agora tem ${s.w}x${s.h}.`, '#cfe');
   }
 
   equipFromSlot(i) {
@@ -375,13 +413,21 @@ class Session {
         this.notify('Pilotando: WASD move, clique dispara torretas RC, Q usa portal, Espaço sai.', '#cfe');
         break;
       }
-      case 'door': o.open = !o.open; this.sfx('click'); break;
-      case 'hatch':
-        o.mode = o.mode === 'none' ? 'all' : 'none';
-        this.notify(`Escotilha: ${o.mode === 'all' ? 'liberada (verde)' : 'bloqueada (vermelha)'}`, '#cfe');
-        this.sfx('click');
+      case 'gunnery': {
+        const busy = s.crew.find((c) => c !== this && c.player && c.player.mode === 'gunner' && c.player.ctrl === o);
+        if (busy) { this.notify(`${busy.name} já está nesse posto.`, '#ffb070'); return; }
+        p.mode = 'gunner'; p.ctrl = o;
+        p.x = (o.x + 1) * TS - p.w / 2; p.y = (o.y + 2) * TS - p.h - 0.1; p.vx = 0; p.vy = 0; p.tp++;
+        this.wrench = null;
+        const n = gunneryTurrets(s, o).length;
+        this.notify(`Artilharia (${GUN_SIDE_NAMES[o.side]}): ${n} torreta${n === 1 ? '' : 's'}. Mouse mira, clique atira, R troca de lado, Espaço sai.`, '#cfe');
         break;
+      }
+      case 'door': o.open = !o.open; this.sfx('click'); break;
+      case 'hatch': this.openUI('hatch', o); break;
+      case 'ammo_crate':
       case 'expando': this.expandoClick(o, this.mouse.ly, false, false); break;
+      case 'loader': this.openUI('loader', o); break;
       case 'shield_gen': this.notify(`Gerador de escudo: ${Math.round(o.fuel || 0)} de carga. Use Reforços ou Fluxo nele.`, '#9fe0ff'); break;
       case 'recycler': this.notify('Clique no reciclador segurando um item para reciclá-lo.', '#cfe'); break;
       case 'ejector': this.notify('Clique no ejetor segurando um item para lançá-lo ao espaço.', '#cfe'); break;
@@ -483,6 +529,8 @@ class Session {
       for (const c of s.crew) if (c.player && c.player.ctrl === obj) c.exitControl();
       if (obj.mats) for (const m of FAB_MATS) if (obj.mats[m] > 0) s.spawnItem(m, obj.mats[m], lx, ly, rand(-40, 40), -100);
       if (obj.inv) for (const st of obj.inv) if (st) s.spawnItem(st.item, st.n, lx, ly, rand(-60, 60), -120);
+      if (obj.carry) s.spawnItem(obj.carry.item, obj.carry.n, lx, ly, rand(-40, 40), -100);
+      if (obj.cart && obj.cart.n > 0) s.spawnItem(obj.cart.item, obj.cart.n, lx, ly, rand(-40, 40), -100);
       if (obj.store && obj.store.item) {
         // caixa desmontada: devolve o conteúdo em pilhas
         let left = obj.store.n;
@@ -550,6 +598,36 @@ class Session {
   }
 
   // ---------- fabricadores ----------
+  // painel do Carregador: direções, filtro de itens e "só em máquinas"
+  loaderOp(m) {
+    if (!this.ui || this.ui.type !== 'loader') return;
+    const o = this.ship.objects.find((x) => x.id === this.ui.oid);
+    if (!o || o.type !== 'loader') return;
+    if (m.op === 'dir') {
+      const v = clamp(m.d | 0, 0, 7);
+      if (m.which === 'in') o.din = v; else o.dout = v;
+    } else if (m.op === 'only') o.only = !!m.v;
+    else if (m.op === 'filter' && ITEMS[m.item]) {
+      const f = new Set(o.filter);
+      if (m.on) f.add(m.item); else f.delete(m.item);
+      o.filter = [...f];
+    } else if (m.op === 'clearf') o.filter = [];
+  }
+
+  // painel da escotilha: aberta/fechada, modo e lista do filtro
+  hatchOp(m) {
+    if (!this.ui || this.ui.type !== 'hatch') return;
+    const o = this.ship.objects.find((x) => x.id === this.ui.oid);
+    if (!o || o.type !== 'hatch') return;
+    if (m.op === 'open') { o.open = !!m.v; this.sfx('click'); }
+    else if (m.op === 'fmode') o.fmode = m.v === 'allow' ? 'allow' : 'block';
+    else if (m.op === 'filter' && ITEMS[m.item]) {
+      const f = new Set(o.filter);
+      if (m.on) f.add(m.item); else f.delete(m.item);
+      o.filter = [...f];
+    } else if (m.op === 'clearf') o.filter = [];
+  }
+
   fabOp(m) {
     if (!this.ui || this.ui.type !== 'fab') return;
     const o = this.ship.objects.find((x) => x.id === this.ui.oid);

@@ -129,7 +129,53 @@ function drawItemIcon(ctx, id, x, y, s, rot = 0) {
 }
 
 // tiles da nave (canto superior esquerdo x,y, tamanho s)
-function drawTileShape(ctx, t, x, y, s) {
+// Trilho: mask diz para quais lados ele se liga (1 cima, 2 direita, 4 baixo, 8 esquerda)
+function drawRail(ctx, x, y, s, mask) {
+  if (!mask) mask = 2 | 8;
+  const cx = x + s / 2, cy = y + s / 2, g = s * 0.17;
+  const seg = (dx, dy) => {
+    // dormentes de madeira
+    ctx.fillStyle = '#6b4f2e';
+    for (const k of [0.18, 0.42]) {
+      const px = cx + dx * s * k, py = cy + dy * s * k;
+      if (dx) ctx.fillRect(px - s * 0.05, cy - s * 0.3, s * 0.1, s * 0.6); else ctx.fillRect(cx - s * 0.3, py - s * 0.05, s * 0.6, s * 0.1);
+    }
+    // dois trilhos de aço
+    ctx.strokeStyle = '#aab3bd'; ctx.lineWidth = Math.max(0.8, s * 0.07);
+    ctx.beginPath();
+    if (dx) { ctx.moveTo(cx, cy - g); ctx.lineTo(cx + dx * s / 2, cy - g); ctx.moveTo(cx, cy + g); ctx.lineTo(cx + dx * s / 2, cy + g); }
+    else { ctx.moveTo(cx - g, cy); ctx.lineTo(cx - g, cy + dy * s / 2); ctx.moveTo(cx + g, cy); ctx.lineTo(cx + g, cy + dy * s / 2); }
+    ctx.stroke();
+  };
+  if (mask & 1) seg(0, -1);
+  if (mask & 2) seg(1, 0);
+  if (mask & 4) seg(0, 1);
+  if (mask & 8) seg(-1, 0);
+  ctx.fillStyle = '#7d868f'; ctx.fillRect(cx - g * 1.25, cy - g * 1.25, g * 2.5, g * 2.5);   // junção
+}
+
+// Desenha um bloco; com formato (shape > 0), recorta a textura no contorno do formato.
+function drawTileShape(ctx, t, x, y, s, shape = 0) {
+  if (t === T.RAIL) return drawRail(ctx, x, y, s, shape);   // no trilho, "shape" é a máscara de ligações
+  if (shape && SHAPED_TILES.has(t)) {
+    const poly = shapePoly(shape, x, y, s);
+    const path = () => { ctx.beginPath(); ctx.moveTo(poly[0][0], poly[0][1]); for (let k = 1; k < 4; k++) ctx.lineTo(poly[k][0], poly[k][1]); ctx.closePath(); };
+    ctx.save(); path(); ctx.clip();
+    drawTileShapeFull(ctx, t, x, y, s);
+    ctx.restore();
+    // borda: clara no topo (inclinado ou não), escura no resto
+    ctx.lineWidth = Math.max(0.6, s * 0.06);
+    ctx.strokeStyle = t === T.NET ? 'rgba(111,176,176,0.95)' : 'rgba(0,0,0,0.45)';
+    path(); ctx.stroke();
+    if (t === T.BLOCK) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.beginPath(); ctx.moveTo(poly[0][0], poly[0][1]); ctx.lineTo(poly[1][0], poly[1][1]); ctx.stroke();
+    }
+    return;
+  }
+  drawTileShapeFull(ctx, t, x, y, s);
+}
+function drawTileShapeFull(ctx, t, x, y, s) {
   switch (t) {
     case T.BLOCK: {
       const g = ctx.createLinearGradient(x, y, x + s, y + s);
@@ -171,6 +217,20 @@ function drawTileShape(ctx, t, x, y, s) {
 }
 
 // objetos (canto superior esquerdo 0,0 já transladado; largura w, altura h em px)
+// braço do Carregador: sai do centro na direção (dx,dy); len = fração do tamanho; leva um item na ponta
+function drawLoaderArm(ctx, w, h, [dx, dy], len, item) {
+  const a = Math.atan2(dy, dx), L = w * len * (dx && dy ? 1.25 : 1);
+  const cx = w / 2, cy = h / 2, tx = cx + Math.cos(a) * L, ty = cy + Math.sin(a) * L;
+  ctx.strokeStyle = '#2a2d33'; ctx.lineWidth = w * 0.2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(tx, ty); ctx.stroke();
+  ctx.strokeStyle = '#c9ced6'; ctx.lineWidth = w * 0.11;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(tx, ty); ctx.stroke();
+  ctx.lineCap = 'butt';
+  ctx.fillStyle = '#e0a83a'; ctx.beginPath(); ctx.arc(cx, cy, w * 0.14, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#7d828a'; ctx.beginPath(); ctx.arc(tx, ty, w * 0.1, 0, Math.PI * 2); ctx.fill();
+  if (item) drawItemIcon(ctx, item, tx, ty, w * 0.62, 0);
+}
+
 function drawObjectShape(ctx, o, w, h, icon = false) {
   const d = OBJECTS[o.type];
   const c = d.color;
@@ -215,6 +275,34 @@ function drawObjectShape(ctx, o, w, h, icon = false) {
       ctx.beginPath(); ctx.arc(w / 2, h / 2, w * 0.24, 0.3, 2.6); ctx.stroke();
       ctx.beginPath(); ctx.arc(w / 2, h / 2, w * 0.24, 3.4, 5.8); ctx.stroke();
       break;
+    case 'gunnery': {
+      // console de artilharia: mesa, tela com a nave e seta para o lado controlado
+      ctx.fillStyle = shade(c, -0.45); ctx.fillRect(w * 0.12, h * 0.62, w * 0.76, h * 0.38);
+      ctx.fillStyle = c; ctx.fillRect(w * 0.08, h * 0.55, w * 0.84, h * 0.12);
+      ctx.fillStyle = '#2a2633'; ctx.fillRect(w * 0.2, h * 0.08, w * 0.6, h * 0.44);
+      ctx.fillStyle = '#0d1a14'; ctx.fillRect(w * 0.24, h * 0.12, w * 0.52, h * 0.36);
+      ctx.strokeStyle = '#4cff7a'; ctx.lineWidth = Math.max(0.6, w * 0.03);
+      ctx.strokeRect(w * 0.4, h * 0.22, w * 0.2, h * 0.16);   // nave na tela
+      const sides = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] }, [dx, dy] = sides[o.side || 'right'];
+      const ax = w * 0.5 + dx * w * 0.18, ay = h * 0.3 + dy * h * 0.13, a = Math.atan2(dy, dx), s2 = w * 0.07;
+      ctx.fillStyle = '#ffd84a'; ctx.beginPath();
+      ctx.moveTo(ax + Math.cos(a) * s2, ay + Math.sin(a) * s2); ctx.lineTo(ax + Math.cos(a + 2.4) * s2, ay + Math.sin(a + 2.4) * s2); ctx.lineTo(ax + Math.cos(a - 2.4) * s2, ay + Math.sin(a - 2.4) * s2); ctx.fill();
+      ctx.fillStyle = '#ff5050'; ctx.fillRect(w * 0.22, h * 0.58, w * 0.08, h * 0.05);
+      ctx.fillStyle = '#ffd84a'; ctx.fillRect(w * 0.7, h * 0.58, w * 0.08, h * 0.05);
+      break;
+    }
+    case 'ammo_crate': {
+      // caixote militar: tampa, cintas e três projéteis na frente
+      box(c);
+      ctx.fillStyle = shade(c, -0.3); ctx.fillRect(w * 0.06, h * 0.1, w * 0.88, h * 0.16);
+      ctx.fillStyle = shade(c, -0.45); ctx.fillRect(w * 0.18, h * 0.1, w * 0.07, h * 0.82); ctx.fillRect(w * 0.75, h * 0.1, w * 0.07, h * 0.82);
+      for (let k = 0; k < 3; k++) {
+        const bx = w * (0.34 + k * 0.12), by = h * 0.38;
+        ctx.fillStyle = '#d9b23e'; ctx.fillRect(bx, by + h * 0.12, w * 0.08, h * 0.32);
+        ctx.fillStyle = '#c7cdd4'; ctx.beginPath(); ctx.moveTo(bx, by + h * 0.12); ctx.lineTo(bx + w * 0.04, by); ctx.lineTo(bx + w * 0.08, by + h * 0.12); ctx.fill();
+      }
+      break;
+    }
     case 'expando':
       box(c);
       ctx.strokeStyle = shade(c, -0.45); ctx.lineWidth = w * 0.05;
@@ -223,10 +311,34 @@ function drawObjectShape(ctx, o, w, h, icon = false) {
       break;
     case 'hatch': {
       box(c);
-      const col = { all: '#6eff6e', block: '#ffe36b', allow: '#ffa03c', none: '#ff5050' }[o.mode || 'all'];
+      // verde: aberta sem filtro • laranja: só alguns itens • amarelo: todos menos alguns • vermelho: fechada
+      const col = o.open === false ? '#ff5050' : o.fmode === 'allow' ? '#ffa03c' : (o.filter && o.filter.length) ? '#ffe36b' : '#6eff6e';
       ctx.fillStyle = '#20301a'; ctx.fillRect(w * 0.15, h * 0.12, w * 0.7, h * 0.3);
       ctx.fillStyle = col;
       ctx.beginPath(); ctx.moveTo(w * 0.3, h * 0.5); ctx.lineTo(w * 0.7, h * 0.5); ctx.lineTo(w * 0.5, h * 0.85); ctx.fill();
+      break;
+    }
+    case 'loader': {
+      // bloco metálico com moldura de alerta, setas de entrada (azul) e saída (laranja)
+      ctx.fillStyle = '#3a3f48'; ctx.fillRect(0, 0, w, h);
+      const fw = w * 0.14;
+      ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.rect(fw, fw, w - fw * 2, h - fw * 2); ctx.clip('evenodd');
+      for (let k = -4; k < 8; k++) { ctx.fillStyle = k % 2 ? '#1c1c1c' : '#e0a83a'; ctx.beginPath(); ctx.moveTo(k * w * 0.2, 0); ctx.lineTo(k * w * 0.2 + w * 0.1, 0); ctx.lineTo(k * w * 0.2 + w * 0.1 + h, h); ctx.lineTo(k * w * 0.2 + h, h); ctx.fill(); }
+      ctx.restore();
+      ctx.fillStyle = '#4c535e'; ctx.fillRect(fw, fw, w - fw * 2, h - fw * 2);
+      const mark = (dir, col, inward) => {
+        const [dx, dy] = LOADER_DIRS[dir], a = Math.atan2(dy, dx);
+        const r = w * 0.36, px = w / 2 + Math.cos(a) * r, py = h / 2 + Math.sin(a) * r, s2 = w * 0.13;
+        const b = inward ? a + Math.PI : a;
+        ctx.fillStyle = col; ctx.beginPath();
+        ctx.moveTo(px + Math.cos(b) * s2, py + Math.sin(b) * s2);
+        ctx.lineTo(px + Math.cos(b + 2.3) * s2, py + Math.sin(b + 2.3) * s2);
+        ctx.lineTo(px + Math.cos(b - 2.3) * s2, py + Math.sin(b - 2.3) * s2);
+        ctx.fill();
+      };
+      mark(o.din ?? 6, '#5ab4ff', true);
+      mark(o.dout ?? 2, '#ffa040', false);
+      if (icon) drawLoaderArm(ctx, w, h, LOADER_DIRS[o.dout ?? 2], 0.42, null);
       break;
     }
     case 'ejector':

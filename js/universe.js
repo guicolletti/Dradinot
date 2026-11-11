@@ -86,7 +86,7 @@ class Universe {
   createShip(sess) {
     let key = makeCode();
     while (this.records[key]) key = makeCode();
-    const ship = buildStarterShip();
+    const ship = USE_TEST_SHIP ? buildTestShip() : buildStarterShip();
     ship.key = key;
     ship.name = `Nave de ${sess.name}`;
     this.records[key] = { owner: sess.token, ownerName: sess.name, name: ship.name, public: false, data: null, members: {}, created: Date.now() };
@@ -281,7 +281,7 @@ class Universe {
 
   objNet(o) {
     const c = {};
-    for (const k in o) if (k !== 'cool') c[k] = o[k];
+    for (const k in o) if (k !== 'cool' && k !== 'lt' && k !== 'cart') c[k] = o[k];   // cronômetros e carrinho não vão aqui
     return c;
   }
 
@@ -296,6 +296,8 @@ class Universe {
       }));
       dyn.push(s.cargoQueue.reduce((a, [, n]) => a + n, 0));
       dyn.push(s.key);
+      // carrinhos de munição: [caixa, x, y, item, quantidade, sentido]
+      dyn.push(s.objects.filter((o) => o.cart).map((o) => [o.id, r1(o.cart.px), r1(o.cart.py), o.cart.item, o.cart.n, o.cart.dir || 1]));
     }
     return dyn;
   }

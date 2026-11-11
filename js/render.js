@@ -3,6 +3,81 @@
 // ============================================================
 'use strict';
 
+// Roda de formatos: anel interno com inteiro, meios e quartos; anel externo com as rampas.
+const SHAPE_WHEEL = { inner: 74, outer: 138, split: 9 };
+function shapeWheelSlot(i, cx, cy) {
+  const inner = i < SHAPE_WHEEL.split;
+  const n = inner ? SHAPE_WHEEL.split : SHAPES.length - SHAPE_WHEEL.split, k = inner ? i : i - SHAPE_WHEEL.split;
+  const a = -Math.PI / 2 + (k / n) * Math.PI * 2, R = inner ? SHAPE_WHEEL.inner : SHAPE_WHEEL.outer;
+  return { x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R, r: inner ? 23 : 22 };
+}
+// formato sob o mouse (ou null perto do centro = manter o atual)
+function shapeWheelPick(mx, my, cx, cy) {
+  const d = Math.hypot(mx - cx, my - cy);
+  if (d < 32) return null;
+  let best = null, bd = Infinity;
+  for (let i = 0; i < SHAPES.length; i++) {
+    const s = shapeWheelSlot(i, cx, cy);
+    const dd = Math.hypot(mx - s.x, my - s.y);
+    if (dd < bd) { bd = dd; best = i; }
+  }
+  return best;
+}
+
+// Roda de direções do Carregador: anel interno = de onde pega (0–7), externo = onde coloca (8–15)
+const DIR_WHEEL = { inner: 58, outer: 112 };
+function dirWheelSlot(i, cx, cy) {
+  const k = i % 8, R = i < 8 ? DIR_WHEEL.inner : DIR_WHEEL.outer;
+  const [dx, dy] = LOADER_DIRS[k], a = Math.atan2(dy, dx);
+  return { x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R, r: i < 8 ? 19 : 21 };
+}
+function dirWheelPick(mx, my, cx, cy) {
+  if (Math.hypot(mx - cx, my - cy) < 30) return null;
+  let best = null, bd = Infinity;
+  for (let i = 0; i < 16; i++) { const s = dirWheelSlot(i, cx, cy), d = Math.hypot(mx - s.x, my - s.y); if (d < bd) { bd = d; best = i; } }
+  return best;
+}
+
+// para quais lados um trilho em (x, y) se liga: outros trilhos e Caixas de Munição
+function railMask(s, x, y) {
+  const link = (cx, cy) => s.get(cx, cy) === T.RAIL || (s.objectAt(cx, cy) || {}).type === 'ammo_crate';
+  return (link(x, y - 1) ? 1 : 0) | (link(x + 1, y) ? 2 : 0) | (link(x, y + 1) ? 4 : 0) | (link(x - 1, y) ? 8 : 0);
+}
+
+// carrinho de munição (coordenadas da nave; x, y = centro da casa do trilho)
+function drawCart(ctx, c) {
+  const w = 14, h = 9, col = ITEMS[c.item] ? ITEMS[c.item].color : '#ccc';
+  ctx.save(); ctx.translate(c.x, c.y + 1);
+  // rodas
+  ctx.fillStyle = '#1b1d22';
+  for (const wx of [-w * 0.3, w * 0.3]) { ctx.beginPath(); ctx.arc(wx, h / 2 - 1, 2.1, 0, Math.PI * 2); ctx.fill(); }
+  ctx.fillStyle = '#8b939c';
+  for (const wx of [-w * 0.3, w * 0.3]) { ctx.beginPath(); ctx.arc(wx, h / 2 - 1, 0.8, 0, Math.PI * 2); ctx.fill(); }
+  // caçamba (vagão de mina vermelho, com contorno escuro)
+  const body = () => { ctx.beginPath(); ctx.moveTo(-w / 2, -h / 2); ctx.lineTo(w / 2, -h / 2); ctx.lineTo(w / 2 - 2, h / 2 - 2); ctx.lineTo(-w / 2 + 2, h / 2 - 2); ctx.closePath(); };
+  ctx.fillStyle = '#b8483a'; body(); ctx.fill();
+  ctx.strokeStyle = '#4a1a14'; ctx.lineWidth = 0.9; body(); ctx.stroke();
+  ctx.fillStyle = '#d9694f'; ctx.fillRect(-w / 2 + 0.5, -h / 2 + 0.5, w - 1, 1.3);
+  ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(-0.5, -h / 2 + 1.5, 1, h - 3.5);
+  // munição saindo por cima (cor do tipo)
+  ctx.fillStyle = col; ctx.fillRect(-w / 2 + 1.5, -h / 2 - 2.2, w - 3, 2.6);
+  ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.fillRect(-w / 2 + 1.5, -h / 2 - 2.2, w - 3, 0.8);
+  // quantidade
+  ctx.font = 'bold 5.5px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = 'rgba(0,0,0,0.9)'; ctx.fillText(c.n, 0.4, h / 2 - 2.6);
+  ctx.fillStyle = '#fff'; ctx.fillText(c.n, 0, h / 2 - 3);
+  ctx.restore();
+}
+
+// Roda de lado do Posto de Artilharia (4 setas)
+const SIDE_WHEEL_R = 74;
+function sideWheelSlot(i, cx, cy) { const a = -Math.PI / 2 + i * Math.PI / 2; return { x: cx + Math.cos(a) * SIDE_WHEEL_R, y: cy + Math.sin(a) * SIDE_WHEEL_R, r: 26 }; }
+function sideWheelPick(mx, my, cx, cy) {
+  if (Math.hypot(mx - cx, my - cy) < 28) return null;
+  const a = Math.atan2(my - cy, mx - cx);
+  return ((Math.round((a + Math.PI / 2) / (Math.PI / 2)) % 4) + 4) % 4;
+}
+
 class Renderer {
   constructor(game, canvas) {
     this.game = game;
@@ -67,6 +142,7 @@ class Renderer {
     vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.5)');
     ctx.fillStyle = vg; ctx.fillRect(0, 0, W_, H_);
     this.drawOffscreenIndicators(ctx);
+    if (g.shapeWheel) this.drawShapeWheel(ctx);
     this.miniT -= dt;
     if (this.miniT <= 0) { this.drawMinimap(); this.miniT = 0.12; }
   }
@@ -349,7 +425,8 @@ class Renderer {
       if (o.type === 'helm') { s._helmSpin = (s._helmSpin || 0) + (s.thrustX || 0) * 0.05; o.spin = s._helmSpin; }
       ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(1, d.h * TS - 1.5, d.w * TS - 2, 2.5);
       drawObjectShape(ctx, o, d.w * TS, d.h * TS);
-      if (o.type === 'expando' && o.store && o.store.item) {
+      if (o.type === 'loader') this.drawLoaderArmAnim(ctx, o);
+      if ((o.type === 'expando' || o.type === 'ammo_crate') && o.store && o.store.item) {
         // mostra o item guardado e a quantidade na frente da caixa
         const bw = d.w * TS, bh = d.h * TS;
         ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(bw / 2 - 7, bh / 2 - 8, 14, 13);
@@ -369,11 +446,18 @@ class Renderer {
       for (let x = 1; x < s.w - 1; x++) {
         const t = s.tiles[y * s.w + x];
         if (t) {
-          drawTileShape(ctx, t, x * TS, y * TS, TS);
+          const shp = t === T.RAIL ? railMask(s, x, y) : s.shapes[y * s.w + x];
+          drawTileShape(ctx, t, x * TS, y * TS, TS, shp);
           const hp = s.tileHp[y * s.w + x], max = TILE_INFO[t].hp;
-          if (hp < max) { ctx.fillStyle = `rgba(0,0,0,${0.5 * (1 - hp / max)})`; ctx.fillRect(x * TS, y * TS, TS, TS); }
+          if (hp < max) {
+            ctx.fillStyle = `rgba(0,0,0,${0.5 * (1 - hp / max)})`;
+            if (shp) { const q = shapePoly(shp, x * TS, y * TS, TS); ctx.beginPath(); q.forEach(([a, b], k) => (k ? ctx.lineTo(a, b) : ctx.moveTo(a, b))); ctx.fill(); }
+            else ctx.fillRect(x * TS, y * TS, TS, TS);
+          }
         }
       }
+    // carrinhos de munição (passam por cima dos trilhos, atrás dos itens)
+    for (const c of s.carts || []) drawCart(ctx, c);
     // itens soltos
     for (const it of s.items) {
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
@@ -409,7 +493,7 @@ class Renderer {
       ctx.fillStyle = dg;
       ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = shade(d.color, -0.6); ctx.lineWidth = 1; ctx.stroke();
-      if (g.player && g.player.ctrl === t) { ctx.strokeStyle = '#ffd84a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.stroke(); }
+      if (g.player && (g.player.ctrl === t || (g.player.mode === 'gunner' && g.player.ctrl && g.player.ctrl.side === t.side && !d.rc))) { ctx.strokeStyle = '#ffd84a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.stroke(); }
       // munição (só na própria nave e com o zoom perto): "13/24", no estilo da quantidade dos itens
       if (ammoAlpha > 0) {
         const txt = `${t.ammo}/${d.cap}`;
@@ -470,6 +554,13 @@ class Renderer {
   }
 
   drawPlayer(ctx, p) {
+    // degraus pequenos (fim de rampa encontrando o platô) são suavizados só no desenho
+    const off = p === this.game.player ? p.visOff || 0 : 0;
+    if (!off) return this.drawPlayerRaw(ctx, p);
+    ctx.save(); ctx.translate(0, off); this.drawPlayerRaw(ctx, p); ctx.restore();
+  }
+
+  drawPlayerRaw(ctx, p) {
     const me = p === this.game.player;
     if (p.jetting) {
       ctx.save(); ctx.globalCompositeOperation = 'lighter';
@@ -608,14 +699,33 @@ class Renderer {
       const d = ITEMS[h.item];
       if (d.kind === 'tile') {
         const ok = inReach && g.canPlaceTile(cx, cy);
-        ctx.globalAlpha = 0.55; drawTileShape(ctx, d.tile, cx * TS, cy * TS, TS); ctx.globalAlpha = 1;
+        const shp = d.tile === T.RAIL ? railMask(s, cx, cy) : g.shapeFor(h.item);
+        ctx.globalAlpha = 0.55; drawTileShape(ctx, d.tile, cx * TS, cy * TS, TS, shp); ctx.globalAlpha = 1;
         ctx.strokeStyle = ok ? '#6eff6e' : '#ff5050'; ctx.lineWidth = 1; ctx.strokeRect(cx * TS + 0.5, cy * TS + 0.5, TS - 1, TS - 1);
+        if (SHAPED_TILES.has(d.tile) && !g.shapeWheel) {
+          // lembrete de que dá para trocar o formato
+          ctx.font = 'bold 4px sans-serif'; ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillText('R: formato', cx * TS + TS / 2 + 0.3, cy * TS + TS + 5.3);
+          ctx.fillStyle = 'rgba(200,255,200,0.85)'; ctx.fillText('R: formato', cx * TS + TS / 2, cy * TS + TS + 5);
+        }
       } else if (d.kind === 'object') {
         const od = OBJECTS[d.obj];
         const ox = cx - Math.floor((od.w - 1) / 2), oy = cy - (od.h - 1);
         const ok = inReach && s.canPlaceObject(d.obj, ox, oy);
         ctx.globalAlpha = 0.5; ctx.save(); ctx.translate(ox * TS, oy * TS);
-        drawObjectShape(ctx, { type: d.obj, queue: [], mats: {}, fuel: 0 }, od.w * TS, od.h * TS); ctx.restore(); ctx.globalAlpha = 1;
+        const ld = g.loaderDirs;
+        drawObjectShape(ctx, { type: d.obj, queue: [], mats: {}, fuel: 0, din: ld.din, dout: ld.dout, side: GUN_SIDES[g.gunSide] }, od.w * TS, od.h * TS, d.obj === 'loader'); ctx.restore(); ctx.globalAlpha = 1;
+        if (d.obj === 'gunnery' && !g.shapeWheel) {
+          ctx.font = 'bold 4px sans-serif'; ctx.textAlign = 'center';
+          const lbl = `R: lado (${GUN_SIDE_NAMES[GUN_SIDES[g.gunSide]]})`, ly2 = (oy + od.h) * TS + 5;
+          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillText(lbl, (ox + od.w / 2) * TS + 0.3, ly2 + 0.3);
+          ctx.fillStyle = 'rgba(200,255,200,0.85)'; ctx.fillText(lbl, (ox + od.w / 2) * TS, ly2);
+        }
+        if (d.obj === 'loader' && !g.shapeWheel) {
+          ctx.font = 'bold 4px sans-serif'; ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillText('R: direções', cx * TS + TS / 2 + 0.3, cy * TS + TS + 5.3);
+          ctx.fillStyle = 'rgba(200,255,200,0.85)'; ctx.fillText('R: direções', cx * TS + TS / 2, cy * TS + TS + 5);
+        }
         ctx.strokeStyle = ok ? '#6eff6e' : '#ff5050'; ctx.lineWidth = 1; ctx.strokeRect(ox * TS + 0.5, oy * TS + 0.5, od.w * TS - 1, od.h * TS - 1);
         if (od.floor) { ctx.fillStyle = ok ? 'rgba(110,255,110,0.3)' : 'rgba(255,80,80,0.3)'; ctx.fillRect(ox * TS, (oy + od.h) * TS, od.w * TS, 3); }
       } else if (d.kind === 'turret') {
@@ -630,14 +740,13 @@ class Renderer {
         ctx.strokeStyle = inReach ? 'rgba(255,220,80,0.8)' : 'rgba(255,80,80,0.6)'; ctx.lineWidth = 1;
         ctx.strokeRect(cx * TS + 0.5, cy * TS + 0.5, TS - 1, TS - 1);
       } else if (d.tool === 'embiggener' || d.tool === 'shrinker') {
-        ctx.strokeStyle = d.color; ctx.lineWidth = 3; ctx.setLineDash([6, 4]);
-        if (g.resizeAxis === 'x') { ctx.beginPath(); ctx.moveTo(s.pw + 4, 0); ctx.lineTo(s.pw + 4, s.ph); ctx.stroke(); }
-        else { ctx.beginPath(); ctx.moveTo(0, -4); ctx.lineTo(s.pw, -4); ctx.stroke(); }
-        ctx.setLineDash([]);
+        this.drawResizePreview(ctx, s, d.tool === 'embiggener' ? 1 : -1, lx, ly, inReach);
       }
     }
-    // dica do que está sob o mouse (itens, torretas, construções, blocos)
-    this.drawHover(ctx, lx, ly, cx, cy, h, inReach);
+    // dica do que está sob o mouse (itens, torretas, construções); com Ampliador/Encolhedor
+    // o clique redimensiona a nave, então a dica da construção não se aplica
+    const resizing = h && (ITEMS[h.item].tool === 'embiggener' || ITEMS[h.item].tool === 'shrinker');
+    if (!resizing) this.drawHover(ctx, lx, ly, cx, cy, h, inReach);
     // progresso da chave inglesa
     if (g.wrench && g.wrench.t > 0) {
       ctx.strokeStyle = '#ffd84a'; ctx.lineWidth = 3;
@@ -701,21 +810,56 @@ class Renderer {
         if (!wrench) hint(h && FAB_MATS.includes(h.item) ? `Carregar ${hd.name}` : 'Abrir');
       } else switch (o.type) {
         case 'helm': if (!wrench) hint('pilotar'); break;
+        case 'gunnery': {
+          const n = gunneryTurrets(s, o).length;
+          info(`Controla: torretas da ${GUN_SIDE_NAMES[o.side]} (${n})`, n ? '#d8d8d8' : '#ffb070');
+          const user = (s.crewNet || []).find((c) => c.mode === 'gunner' && c.id !== g.pid && Math.abs(c.x + 6 - (o.x + 1) * TS) < 10 && Math.abs(c.y + 22 - (o.y + 2) * TS) < 4);
+          if (user) info(`Em uso por ${user.name}`, '#ffb070');
+          if (!wrench) hint('usar');
+          break;
+        }
         case 'door': info(o.open ? 'Aberta' : 'Fechada'); if (!wrench) hint(o.open ? 'fechar' : 'abrir'); break;
-        case 'hatch': info(o.mode === 'none' ? 'Bloqueada' : 'Liberada', o.mode === 'none' ? '#ff8a7a' : '#8aff8a'); if (!wrench) hint(o.mode === 'none' ? 'liberar' : 'bloquear'); break;
+        case 'hatch': {
+          info(o.open ? 'Aberta' : 'Fechada', o.open ? '#8aff8a' : '#ff8a7a');
+          const f = o.filter || [], names = f.length > 2 ? `${f.length} itens` : f.map((k) => ITEMS[k].name).join(', ');
+          if (o.fmode === 'allow') info(f.length ? `Só deixa passar: ${names}` : 'Só deixa passar: (nada marcado)', f.length ? '#d8d8d8' : '#ffb070');
+          else if (f.length) info(`Não deixa passar: ${names}`);
+          if (!wrench) hint('configurar');
+          break;
+        }
         case 'shield_gen':
           info(`Carga ${Math.round(o.fuel || 0)}`);
           if (!wrench) hint(h && (h.item === 'booster' || h.item === 'flux') ? `abastecer com ${hd.name}` : 'Abasteça com Reforço ou Fluxo');
           break;
         case 'recycler': if (!wrench) hint(h ? `reciclar ${hd.name}` : 'Segure um item para reciclar'); break;
+        case 'loader': {
+          info(`Pega ${LOADER_ARROWS[o.din]} ${LOADER_DIR_NAMES[o.din]} • coloca ${LOADER_ARROWS[o.dout]} ${LOADER_DIR_NAMES[o.dout]}`);
+          if (o.filter && o.filter.length) info(`Filtro: ${o.filter.length > 2 ? o.filter.length + ' itens' : o.filter.map((k) => ITEMS[k].name).join(', ')}`, '#bcbcbc');
+          if (o.only) info('Só em máquinas', '#bcbcbc');
+          if (o.carry) info(`${ITEMS[o.carry.item].name} ×${o.carry.n}${o.wait ? ' — esperando espaço' : ''}`, o.wait ? '#ffb070' : '#d8d8d8');
+          if (!wrench) hint('configurar');
+          break;
+        }
         case 'ejector': if (!wrench) hint(h ? `lançar ${hd.name} ao espaço` : 'Segure um item para lançar'); break;
+        case 'ammo_crate':
         case 'expando': {
           const st = o.store || { item: null, n: 0 };
           info(st.item ? `${ITEMS[st.item].name} ${st.n}/${expandoCap(st.item)}` : 'Vazia', st.item ? '#d8d8d8' : '#bcbcbc');
+          if (o.type === 'ammo_crate') {
+            const d = OBJECTS.ammo_crate;
+            let linked = false;
+            for (let k = 0; k < d.w && !linked; k++) linked = s.get(o.x + k, o.y - 1) === T.RAIL || s.get(o.x + k, o.y + d.h) === T.RAIL;
+            for (let k = 0; k < d.h && !linked; k++) linked = s.get(o.x - 1, o.y + k) === T.RAIL || s.get(o.x + d.w, o.y + k) === T.RAIL;
+            const cart = (s.carts || []).find((c) => c.id === o.id);
+            if (!linked) info('Sem trilho: encoste um Trilho na caixa', '#ffb070');
+            else if (cart) info(`Carrinho na rota: ${ITEMS[cart.item].name} ×${cart.n}`);
+            else if (st.item) info('Carrinho saindo…', '#bcbcbc');
+          }
           if (wrench) break;
           const half = rect.h / 2, top = ly < rect.y + half;
           let upTxt, upOk, dnTxt, dnOk;
-          if (!h) { upTxt = 'Segure um item para guardar'; upOk = false; }
+          if (!h) { upTxt = o.type === 'ammo_crate' ? 'Segure uma munição para guardar' : 'Segure um item para guardar'; upOk = false; }
+          else if (o.type === 'ammo_crate' && hd.kind !== 'ammo') { upTxt = 'Só guarda munição'; upOk = false; }
           else if (st.item && st.item !== h.item) { upTxt = `Só guarda ${ITEMS[st.item].name}`; upOk = false; }
           else if (st.n >= expandoCap(h.item)) { upTxt = 'Caixa cheia'; upOk = false; }
           else { upTxt = `Guardar ${hd.name}`; upOk = true; }
@@ -797,6 +941,191 @@ class Renderer {
       ctx.fillText(row.t, r.x + r.w / 2, by + pad + (i + 1) * LH - 1.2);
     });
     ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+  }
+
+  // Braço do Carregador: parado aponta para a entrada; carregando, gira da entrada até a saída
+  // em LOADER_TIME s (o cronômetro é local: o servidor só avisa quando um movimento começa).
+  drawLoaderArmAnim(ctx, o) {
+    const A = this.loaderAnim || (this.loaderAnim = new Map());
+    const key = o.carry ? o.seq + ':' + o.carry.item : null;
+    let st = A.get(o.id);
+    if (!st || st.key !== key) { st = { key, t0: performance.now() }; A.set(o.id, st); }
+    const ain = Math.atan2(LOADER_DIRS[o.din][1], LOADER_DIRS[o.din][0]), aout = Math.atan2(LOADER_DIRS[o.dout][1], LOADER_DIRS[o.dout][0]);
+    let a = ain, item = null, len = 0.42;
+    if (o.carry) {
+      const k = o.wait ? 1 : Math.min(1, (performance.now() - st.t0) / 1000 / LOADER_TIME);
+      const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;   // suaviza início e fim
+      a = ain + angDiff(ain, aout) * e;
+      item = o.carry.item;
+      len = 0.42 + Math.sin(k * Math.PI) * -0.12;   // recolhe um pouco no meio do caminho
+    }
+    drawLoaderArm(ctx, TS, TS, [Math.cos(a), Math.sin(a)], len, item);
+    if (o.carry && o.carry.n > 1) {
+      ctx.font = 'bold 5px sans-serif'; ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillText(o.carry.n, TS + 0.5, TS + 0.5);
+      ctx.fillStyle = '#fff'; ctx.fillText(o.carry.n, TS, TS);
+    }
+  }
+
+  // prévia do Ampliador (onde entra a coluna/linha nova) e do Encolhedor (o que sai, ou por que não)
+  drawResizePreview(ctx, s, dir, lx, ly, inReach) {
+    const g = this.game, ax = g.resizeAxis, X = ax === 'x';
+    const at = resizeTarget(s, ax, dir, lx, ly);
+    let ok = inReach, label;
+    const GREEN = '83,255,91', RED = '255,90,90';
+    if (dir > 0) {
+      const v = at * TS;
+      ctx.strokeStyle = `rgba(${GREEN},0.95)`; ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
+      ctx.beginPath();
+      if (X) { ctx.moveTo(v, -6); ctx.lineTo(v, s.ph + 6); } else { ctx.moveTo(-6, v); ctx.lineTo(s.pw + 6, v); }
+      ctx.stroke(); ctx.setLineDash([]);
+      // setas mostrando para onde o conteúdo anda
+      ctx.fillStyle = `rgba(${GREEN},0.9)`;
+      const arrow = (x, y) => { ctx.beginPath(); if (X) { ctx.moveTo(x + 1, y - 3); ctx.lineTo(x + 6, y); ctx.lineTo(x + 1, y + 3); } else { ctx.moveTo(x - 3, y + 1); ctx.lineTo(x, y + 6); ctx.lineTo(x + 3, y + 1); } ctx.fill(); };
+      if (X) { arrow(v, -3); arrow(v, s.ph + 3); } else { arrow(-3, v); arrow(s.pw + 3, v); }
+      label = s.w + (X ? 1 : 0) > MAX_SHIP_TILES || s.h + (X ? 0 : 1) > MAX_SHIP_TILES ? 'Tamanho máximo atingido' : `Inserir ${X ? 'coluna' : 'linha'} aqui`;
+      if (label !== `Inserir ${X ? 'coluna' : 'linha'} aqui`) ok = false;
+    } else {
+      const people = [g.player, ...(s.crewNet || [])].filter((p) => p && p.x !== undefined && (p.mode === 'walk' || p.mode === undefined))
+        .map((p) => ({ x: p.x, y: p.y, w: p.w || 12, h: p.h || 22 }));
+      const err = s.shrinkBlocker(ax, at, people);
+      if (err) ok = false;
+      label = err || `Remover esta ${X ? 'coluna' : 'linha'}`;
+      const c = ok ? GREEN : RED;
+      const rx = X ? at * TS : 0, ry = X ? 0 : at * TS, rw = X ? TS : s.pw, rh = X ? s.ph : TS;
+      ctx.fillStyle = `rgba(${c},0.18)`; ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeStyle = `rgba(${c},0.9)`; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+      ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1); ctx.setLineDash([]);
+    }
+    if (!inReach) label = 'Muito longe';
+    // legenda junto do mouse, no mesmo estilo das outras dicas
+    ctx.font = 'bold 4.5px sans-serif'; ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 1.5;
+    ctx.fillStyle = ok ? '#53ff5b' : '#ff8a7a';
+    ctx.fillText(label, lx, ly - 8);
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+  }
+
+  // ---------- roda de formatos (segurar R com Bloco ou Rede) ----------
+  drawDirWheel(ctx) {
+    const g = this.game, wh = g.shapeWheel, ld = g.loaderDirs;
+    ctx.save();
+    ctx.fillStyle = 'rgba(8,12,20,0.86)';
+    ctx.beginPath(); ctx.arc(wh.cx, wh.cy, DIR_WHEEL.outer + 32, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(83,255,91,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.lineWidth = 1;
+    for (const [r, c] of [[DIR_WHEEL.inner, 'rgba(90,180,255,0.25)'], [DIR_WHEEL.outer, 'rgba(255,160,64,0.25)']]) { ctx.strokeStyle = c; ctx.beginPath(); ctx.arc(wh.cx, wh.cy, r, 0, Math.PI * 2); ctx.stroke(); }
+    // Carregador no centro, já com as direções escolhidas
+    ctx.save(); ctx.translate(wh.cx - 22, wh.cy - 22);
+    drawObjectShape(ctx, { type: 'loader', din: ld.din, dout: ld.dout }, 44, 44, true);
+    ctx.restore();
+    for (let i = 0; i < 16; i++) {
+      const { x, y, r } = dirWheelSlot(i, wh.cx, wh.cy);
+      const isIn = i < 8, k = i % 8, sel = isIn ? ld.din === k : ld.dout === k, hov = wh.hover === i;
+      const col = isIn ? '90,180,255' : '255,160,64';
+      ctx.fillStyle = hov ? `rgba(${col},0.35)` : sel ? `rgba(${col},0.22)` : 'rgba(20,30,46,0.92)';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = hov || sel ? 2 : 1.2;
+      ctx.strokeStyle = hov ? '#53ff5b' : sel ? `rgb(${col})` : 'rgba(255,255,255,0.18)'; ctx.stroke();
+      // seta: entrada aponta para o centro (o item vem de lá), saída aponta para fora
+      const [dx, dy] = LOADER_DIRS[k], a = Math.atan2(dy, dx) + (isIn ? Math.PI : 0), s2 = r * 0.55;
+      ctx.fillStyle = sel || hov ? '#fff' : `rgba(${col},0.9)`;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(a) * s2, y + Math.sin(a) * s2);
+      ctx.lineTo(x + Math.cos(a + 2.4) * s2, y + Math.sin(a + 2.4) * s2);
+      ctx.lineTo(x + Math.cos(a - 2.4) * s2, y + Math.sin(a - 2.4) * s2);
+      ctx.fill();
+    }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 3;
+    const hv = wh.hover;
+    ctx.font = 'bold 12px sans-serif';
+    if (hv !== null) {
+      ctx.fillStyle = hv < 8 ? '#7cc4ff' : '#ffb366';
+      ctx.fillText(`${hv < 8 ? 'Pegar de' : 'Colocar em'}: ${LOADER_DIR_NAMES[hv % 8]}`, wh.cx, wh.cy - DIR_WHEEL.outer - 22);
+    } else {
+      ctx.fillStyle = '#c8f5ca';
+      ctx.fillText(`Pega: ${LOADER_DIR_NAMES[ld.din]} • Coloca: ${LOADER_DIR_NAMES[ld.dout]}`, wh.cx, wh.cy - DIR_WHEEL.outer - 22);
+    }
+    ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    ctx.fillText('anel azul: pegar de • anel laranja: colocar em • clique escolhe, solte o R para fechar', wh.cx, wh.cy + DIR_WHEEL.outer + 22);
+    ctx.restore();
+  }
+
+  drawSideWheel(ctx) {
+    const g = this.game, wh = g.shapeWheel;
+    ctx.save();
+    ctx.fillStyle = 'rgba(8,12,20,0.86)';
+    ctx.beginPath(); ctx.arc(wh.cx, wh.cy, SIDE_WHEEL_R + 40, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(83,255,91,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.save(); ctx.translate(wh.cx - 24, wh.cy - 24);
+    drawObjectShape(ctx, { type: 'gunnery', side: GUN_SIDES[g.gunSide] }, 48, 48, true);
+    ctx.restore();
+    for (let i = 0; i < 4; i++) {
+      const { x, y, r } = sideWheelSlot(i, wh.cx, wh.cy), hov = wh.hover === i, sel = g.gunSide === i;
+      ctx.fillStyle = hov ? 'rgba(83,255,91,0.3)' : sel ? 'rgba(240,194,122,0.22)' : 'rgba(20,30,46,0.92)';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = hov || sel ? 2 : 1.2; ctx.strokeStyle = hov ? '#53ff5b' : sel ? '#f0c27a' : 'rgba(255,255,255,0.18)'; ctx.stroke();
+      const a = -Math.PI / 2 + i * Math.PI / 2, s2 = r * 0.55;
+      ctx.fillStyle = hov || sel ? '#fff' : 'rgba(255,255,255,0.6)';
+      ctx.beginPath(); ctx.moveTo(x + Math.cos(a) * s2, y + Math.sin(a) * s2); ctx.lineTo(x + Math.cos(a + 2.4) * s2, y + Math.sin(a + 2.4) * s2); ctx.lineTo(x + Math.cos(a - 2.4) * s2, y + Math.sin(a - 2.4) * s2); ctx.fill();
+    }
+    const show = wh.hover ?? g.gunSide, side = GUN_SIDES[show];
+    const n = gunneryTurrets(g.ship, { side }).length;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 3;
+    ctx.font = 'bold 12px sans-serif'; ctx.fillStyle = '#53ff5b';
+    ctx.fillText(`Torretas da ${GUN_SIDE_NAMES[side] === 'cima' || GUN_SIDE_NAMES[side] === 'baixo' ? 'parte de ' : ''}${GUN_SIDE_NAMES[side]} (${n})`, wh.cx, wh.cy - SIDE_WHEEL_R - 52);
+    ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    ctx.fillText('solte o R sobre o lado • Esc cancela', wh.cx, wh.cy + SIDE_WHEEL_R + 52);
+    ctx.restore();
+  }
+
+  drawShapeWheel(ctx) {
+    const g = this.game, wh = g.shapeWheel;
+    if (wh.kind === 'dir') return this.drawDirWheel(ctx);
+    if (wh.kind === 'side') return this.drawSideWheel(ctx);
+    const tile = ITEMS[wh.item].tile;
+    const cur = g.shapeFor(wh.item);
+    ctx.save();
+    // fundo
+    ctx.fillStyle = 'rgba(8,12,20,0.86)';
+    ctx.beginPath(); ctx.arc(wh.cx, wh.cy, SHAPE_WHEEL.outer + 32, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(83,255,91,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
+    // miolo escuro para o nome ficar legível
+    ctx.fillStyle = 'rgba(4,8,14,0.95)';
+    ctx.beginPath(); ctx.arc(wh.cx, wh.cy, SHAPE_WHEEL.inner - 30, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+    for (const r of [SHAPE_WHEEL.inner, SHAPE_WHEEL.outer]) { ctx.beginPath(); ctx.arc(wh.cx, wh.cy, r, 0, Math.PI * 2); ctx.stroke(); }
+    for (let i = 0; i < SHAPES.length; i++) {
+      const { x, y, r } = shapeWheelSlot(i, wh.cx, wh.cy);
+      const hov = wh.hover === i, sel = cur === i;
+      ctx.fillStyle = hov ? 'rgba(83,255,91,0.22)' : 'rgba(20,30,46,0.92)';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = hov ? 2 : 1.2;
+      ctx.strokeStyle = hov ? '#53ff5b' : sel ? '#f0c27a' : 'rgba(255,255,255,0.18)';
+      ctx.stroke();
+      const sz = r * 1.25;
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(x - sz / 2, y - sz / 2, sz, sz);
+      drawTileShape(ctx, tile, x - sz / 2, y - sz / 2, sz, i);
+    }
+    // centro: nome do formato sob o mouse (ou o atual)
+    const show = wh.hover ?? cur;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 3;
+    const S = SHAPES[show], sub = S.name.startsWith(S.g) ? S.name.slice(S.g.length).trim() : S.name;
+    ctx.font = 'bold 13px sans-serif'; ctx.fillStyle = '#53ff5b';
+    ctx.fillText(S.g, wh.cx, wh.cy - (sub ? 8 : 0));
+    if (sub) {
+      ctx.font = '10px sans-serif'; ctx.fillStyle = '#c8f5ca';
+      // quebra em duas linhas se não couber no miolo
+      const words = sub.split(' '), maxW = (SHAPE_WHEEL.inner - 34) * 2;
+      let l1 = sub, l2 = '';
+      if (ctx.measureText(sub).width > maxW) { const k = Math.ceil(words.length / 2); l1 = words.slice(0, k).join(' '); l2 = words.slice(k).join(' '); }
+      ctx.fillText(l1, wh.cx, wh.cy + 7); if (l2) ctx.fillText(l2, wh.cx, wh.cy + 19);
+    }
+    ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText('solte o R para escolher • Esc cancela', wh.cx, wh.cy + SHAPE_WHEEL.outer + 20);
+    ctx.restore();
   }
 
   drawOffscreenIndicators(ctx) {
